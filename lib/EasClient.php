@@ -112,7 +112,9 @@ final class EasClient
             $id = $this->firstText($folder, 'ServerId');
             $name = $this->firstText($folder, 'DisplayName');
             $type = (int) $this->firstText($folder, 'Type');
-            if ($id === '' || $name === '' || in_array($type, [7, 8, 9, 13, 14, 15], true)) {
+            // Yalnızca gerçek posta klasörlerini göster; takvim, kişi, görev ve
+            // Exchange'in sistem klasörleri posta arayüzüne karışmasın.
+            if ($id === '' || $name === '' || !in_array($type, [1, 2, 3, 4, 5, 6, 12], true)) {
                 continue;
             }
             $folders[] = [
@@ -201,13 +203,13 @@ final class EasClient
 
         $attachments = [];
         foreach ($this->findNodes($data, 'Attachment') as $attachment) {
-            $id = $this->firstText($attachment, 'FileReference');
-            $name = $this->firstText($attachment, 'DisplayName');
+            $id = $this->firstText($attachment, 'FileReference') ?: $this->firstText($attachment, 'Att0Id');
+            $name = $this->firstText($attachment, 'DisplayName') ?: $this->firstText($attachment, 'AttName');
             if ($id !== '' && $name !== '') {
                 $attachments[] = [
                     'id' => $id,
                     'name' => $name,
-                    'size' => (int) $this->firstText($attachment, 'EstimatedDataSize'),
+                    'size' => (int) ($this->firstText($attachment, 'EstimatedDataSize') ?: $this->firstText($attachment, 'AttSize')),
                     'contentType' => $this->firstText($attachment, 'ContentType'),
                 ];
             }
@@ -482,7 +484,7 @@ final class EasClient
     private function firstText(WbxmlNode $node, string $name): string
     {
         $nodes = $this->findNodes($node, $name);
-        return $nodes[0]->text ?? '';
+        return isset($nodes[0]) ? $nodes[0]->text : '';
     }
 
     private function directChild(WbxmlNode $node, string $name): ?WbxmlNode
