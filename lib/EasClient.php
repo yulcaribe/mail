@@ -53,6 +53,11 @@ final class EasClient
             20 => 'ContentLocation', 21 => 'IsInline', 22 => 'NativeBodyType',
             23 => 'ContentType', 24 => 'Preview',
         ],
+        20 => [
+            5 => 'ItemOperations', 6 => 'Fetch', 7 => 'Store', 8 => 'Options',
+            9 => 'Range', 10 => 'Total', 11 => 'Properties', 12 => 'Data',
+            13 => 'Status', 14 => 'Response', 15 => 'Version', 16 => 'Schema', 17 => 'Part',
+        ],
     ];
 
     /** @var array<string, mixed> */
@@ -280,6 +285,44 @@ final class EasClient
         }
 
         return count($ids);
+    }
+
+    public function fetchAttachment(string $fileReference): string
+    {
+        $reference = trim($fileReference);
+        if ($reference === '' || strlen($reference) > 2048) {
+            throw new InvalidArgumentException('Ek kimliği geçersiz.');
+        }
+
+        $payload = $this->document(
+            $this->tag(20, 5,
+                $this->tag(20, 6,
+                    $this->tag(20, 7, $this->inlineText('Mailbox')) .
+                    $this->tag(17, 17, $this->inlineText($reference))
+                )
+            )
+        );
+        $tree = $this->request('ItemOperations', $payload);
+        $fetch = $this->findNodes($tree, 'Fetch')[0] ?? $tree;
+        $status = $this->firstText($fetch, 'Status') ?: $this->firstText($tree, 'Status');
+        if ($status !== '1') {
+            throw new RuntimeException('Ek indirilemedi. Exchange durum kodu: ' . ($status !== '' ? $status : 'yanıt yok'));
+        }
+
+        foreach ($this->findNodes($fetch, 'Data') as $dataNode) {
+            if ($dataNode->binary !== '') {
+                return $dataNode->binary;
+            }
+            $encoded = preg_replace('/\s+/', '', $dataNode->text) ?: '';
+            if ($encoded !== '') {
+                $decoded = base64_decode($encoded, true);
+                if ($decoded !== false) {
+                    return $decoded;
+                }
+            }
+        }
+
+        throw new RuntimeException('Exchange ek verisini döndürmedi.');
     }
 
     /** @return array<string, mixed> */

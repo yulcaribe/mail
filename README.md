@@ -2,6 +2,16 @@
 
 Node, npm, derleme veya veritabanı gerektirmeyen sade PHP posta arayüzü.
 
+## Özellikler
+
+- Exchange posta klasörlerini ve mailleri listeleme
+- Maili açıp güvenli düz metin olarak okuma
+- Ekleri indirme
+- Tekli veya toplu okundu/okunmadı işaretleme
+- Tekli veya toplu klasöre taşıma
+- Silme; Çöp Kutusu içindeyken onaylı kalıcı silme
+- Klasör içinde arama ve mobil uyumlu görünüm
+
 ## Hosting kurulumu
 
 1. Bu klasörün içindeki dosyaların tamamını hostingde alan adının kök klasörüne yükleyin.

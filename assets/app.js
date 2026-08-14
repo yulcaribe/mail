@@ -446,8 +446,11 @@ function renderReaderAttachments(attachments) {
     elements.readerAttachments.replaceChildren();
     elements.readerAttachments.hidden = attachments.length === 0;
     for (const attachment of attachments) {
-        const chip = document.createElement('span');
+        const chip = document.createElement('a');
         chip.className = 'attachment-chip';
+        chip.href = `api.php?${new URLSearchParams({ action: 'attachment', id: attachment.id || '', name: attachment.name || 'ek' })}`;
+        chip.setAttribute('download', attachment.name || 'ek');
+        chip.title = 'Eki indir';
         const name = document.createElement('strong');
         name.textContent = `⌇ ${attachment.name || 'Ek'}`;
         const size = document.createElement('small');

@@ -114,6 +114,24 @@ function clearMailSession(): void
     session_destroy();
 }
 
+function attachmentContentType(string $name): string
+{
+    return match (strtolower(pathinfo($name, PATHINFO_EXTENSION))) {
+        'pdf' => 'application/pdf',
+        'jpg', 'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'gif' => 'image/gif',
+        'txt' => 'text/plain; charset=utf-8',
+        'csv' => 'text/csv; charset=utf-8',
+        'zip' => 'application/zip',
+        'doc' => 'application/msword',
+        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'xls' => 'application/vnd.ms-excel',
+        'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        default => 'application/octet-stream',
+    };
+}
+
 $action = strtolower(trim((string) ($_GET['action'] ?? 'status')));
 
 try {
@@ -181,6 +199,21 @@ try {
         $_SESSION['sync_keys'][$folderId] = $result['syncKey'];
         unset($result['syncKey']);
         respond(['ok' => true] + $result);
+    }
+
+    if ($action === 'attachment') {
+        requireMethod('GET');
+        $attachmentId = trim((string) ($_GET['id'] ?? ''));
+        $requestedName = trim((string) ($_GET['name'] ?? 'ek'));
+        $safeName = preg_replace('/[\x00-\x1F\x7F\\\/]+/u', '_', $requestedName) ?: 'ek';
+        $safeName = mb_substr($safeName, 0, 180, 'UTF-8');
+        $bytes = $client->fetchAttachment($attachmentId);
+
+        header('Content-Type: ' . attachmentContentType($safeName));
+        header('Content-Length: ' . strlen($bytes));
+        header("Content-Disposition: attachment; filename=\"attachment\"; filename*=UTF-8''" . rawurlencode($safeName));
+        echo $bytes;
+        exit;
     }
 
     if (in_array($action, ['delete', 'mark', 'move'], true)) {

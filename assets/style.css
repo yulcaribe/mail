@@ -1033,6 +1033,13 @@ noscript {
     background: var(--soft);
     border: 1px solid var(--line);
     border-radius: 9px;
+    text-decoration: none;
+    transition: border-color .15s, background .15s;
+}
+
+.attachment-chip:hover {
+    background: #fff8f4;
+    border-color: #efb59c;
 }
 
 .attachment-chip strong {
