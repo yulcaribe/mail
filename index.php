@@ -14,8 +14,8 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <title>Beyan Mail</title>
-    <link rel="stylesheet" href="assets/style.css?v=1">
-    <script src="assets/app.js?v=1" defer></script>
+    <link rel="stylesheet" href="assets/style.css?v=2">
+    <script src="assets/app.js?v=2" defer></script>
 </head>
 <body>
     <noscript>Bu posta arayüzünü kullanmak için JavaScript etkin olmalıdır.</noscript>
@@ -98,8 +98,28 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
             </header>
 
             <div class="list-toolbar">
-                <p id="messageCount">Mailler yükleniyor…</p>
+                <div class="list-summary">
+                    <label class="select-all" title="Görünen maillerin tümünü seç">
+                        <input id="selectAll" type="checkbox" aria-label="Görünen maillerin tümünü seç">
+                        <span></span>
+                    </label>
+                    <p id="messageCount">Mailler yükleniyor…</p>
+                </div>
                 <span id="pageInfo"></span>
+            </div>
+
+            <div class="bulk-toolbar" id="bulkToolbar" hidden>
+                <strong id="selectedCount">0 mail seçildi</strong>
+                <div class="bulk-actions">
+                    <button id="markReadButton" type="button" title="Okundu olarak işaretle">✓ Okundu</button>
+                    <button id="markUnreadButton" type="button" title="Okunmadı olarak işaretle">● Okunmadı</button>
+                    <div class="move-control">
+                        <select id="moveTarget" aria-label="Taşınacak klasör"></select>
+                        <button id="moveButton" type="button">Taşı</button>
+                    </div>
+                    <button class="danger-action" id="deleteButton" type="button">⌫ Sil</button>
+                    <button class="clear-selection" id="clearSelectionButton" type="button" aria-label="Seçimi temizle">×</button>
+                </div>
             </div>
 
             <section class="message-list" id="messageList" aria-live="polite">
@@ -109,6 +129,47 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
                 </div>
             </section>
         </main>
+
+        <div class="reader-overlay" id="readerOverlay" hidden>
+            <div class="reader-backdrop" id="readerBackdrop"></div>
+            <article class="reader-panel" role="dialog" aria-modal="true" aria-labelledby="readerSubject">
+                <header class="reader-toolbar">
+                    <button class="reader-close" id="readerClose" type="button" aria-label="Maili kapat">←</button>
+                    <div class="reader-nav">
+                        <button id="readerPrevious" type="button" aria-label="Önceki mail">↑</button>
+                        <button id="readerNext" type="button" aria-label="Sonraki mail">↓</button>
+                    </div>
+                    <div class="reader-actions">
+                        <button id="readerUnread" type="button">● Okunmadı</button>
+                        <div class="move-control reader-move">
+                            <select id="readerMoveTarget" aria-label="Maili taşıyacağınız klasör"></select>
+                            <button id="readerMoveButton" type="button">Taşı</button>
+                        </div>
+                        <button class="danger-action" id="readerDelete" type="button">⌫ Sil</button>
+                    </div>
+                </header>
+
+                <div class="reader-content">
+                    <p class="reader-folder" id="readerFolder"></p>
+                    <h1 id="readerSubject">(Konu yok)</h1>
+                    <div class="reader-sender-row">
+                        <span class="reader-avatar" id="readerAvatar">?</span>
+                        <div class="reader-addresses">
+                            <strong id="readerFrom"></strong>
+                            <button id="recipientToggle" type="button" aria-expanded="false">Alıcı ayrıntıları⌄</button>
+                            <div class="recipient-details" id="recipientDetails" hidden>
+                                <p><span>Kime</span><b id="readerTo">—</b></p>
+                                <p id="readerCcRow"><span>Bilgi</span><b id="readerCc">—</b></p>
+                            </div>
+                        </div>
+                        <time id="readerDate"></time>
+                    </div>
+
+                    <div class="reader-attachments" id="readerAttachments" hidden></div>
+                    <div class="reader-body" id="readerBody"></div>
+                </div>
+            </article>
+        </div>
     </section>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

@@ -2,10 +2,14 @@
 
 const state = {
     username: '',
+    csrf: '',
     folders: [],
     activeFolder: null,
     messages: [],
+    selected: new Set(),
+    readerMessageId: '',
     loading: false,
+    processing: false,
 };
 
 const elements = {
@@ -31,6 +35,36 @@ const elements = {
     sidebar: document.querySelector('#sidebar'),
     pageShade: document.querySelector('#pageShade'),
     toast: document.querySelector('#toast'),
+    selectAll: document.querySelector('#selectAll'),
+    bulkToolbar: document.querySelector('#bulkToolbar'),
+    selectedCount: document.querySelector('#selectedCount'),
+    markReadButton: document.querySelector('#markReadButton'),
+    markUnreadButton: document.querySelector('#markUnreadButton'),
+    moveTarget: document.querySelector('#moveTarget'),
+    moveButton: document.querySelector('#moveButton'),
+    deleteButton: document.querySelector('#deleteButton'),
+    clearSelectionButton: document.querySelector('#clearSelectionButton'),
+    readerOverlay: document.querySelector('#readerOverlay'),
+    readerBackdrop: document.querySelector('#readerBackdrop'),
+    readerClose: document.querySelector('#readerClose'),
+    readerPrevious: document.querySelector('#readerPrevious'),
+    readerNext: document.querySelector('#readerNext'),
+    readerUnread: document.querySelector('#readerUnread'),
+    readerMoveTarget: document.querySelector('#readerMoveTarget'),
+    readerMoveButton: document.querySelector('#readerMoveButton'),
+    readerDelete: document.querySelector('#readerDelete'),
+    readerFolder: document.querySelector('#readerFolder'),
+    readerSubject: document.querySelector('#readerSubject'),
+    readerAvatar: document.querySelector('#readerAvatar'),
+    readerFrom: document.querySelector('#readerFrom'),
+    readerTo: document.querySelector('#readerTo'),
+    readerCc: document.querySelector('#readerCc'),
+    readerCcRow: document.querySelector('#readerCcRow'),
+    readerDate: document.querySelector('#readerDate'),
+    readerAttachments: document.querySelector('#readerAttachments'),
+    readerBody: document.querySelector('#readerBody'),
+    recipientToggle: document.querySelector('#recipientToggle'),
+    recipientDetails: document.querySelector('#recipientDetails'),
 };
 
 const roleIcons = {
@@ -44,12 +78,17 @@ const roleIcons = {
 
 async function api(action, options = {}) {
     const query = new URLSearchParams({ action, ...(options.query || {}) });
+    const method = options.method || 'GET';
     const request = {
-        method: options.method || 'GET',
+        method,
         credentials: 'same-origin',
+        cache: 'no-store',
         headers: { Accept: 'application/json' },
     };
 
+    if (method !== 'GET' && action !== 'login' && state.csrf) {
+        request.headers['X-CSRF-Token'] = state.csrf;
+    }
     if (options.body) {
         request.headers['Content-Type'] = 'application/json';
         request.body = JSON.stringify(options.body);
@@ -73,9 +112,12 @@ async function api(action, options = {}) {
 
 function showLogin(message = '') {
     state.username = '';
+    state.csrf = '';
     state.folders = [];
     state.activeFolder = null;
     state.messages = [];
+    state.selected.clear();
+    closeReader();
     elements.mailView.hidden = true;
     elements.loginView.hidden = false;
     elements.loginError.textContent = message;
@@ -84,8 +126,9 @@ function showLogin(message = '') {
     requestAnimationFrame(() => elements.username.focus());
 }
 
-function showMail(username, folders) {
+function showMail(username, folders, csrf) {
     state.username = username;
+    state.csrf = csrf || '';
     state.folders = folders;
     elements.loginView.hidden = true;
     elements.mailView.hidden = false;
@@ -131,19 +174,47 @@ function markActiveFolder() {
     }
 }
 
-async function selectFolder(folder, force = false) {
-    if (state.loading && !force) return;
+function renderMoveTargets() {
+    for (const select of [elements.moveTarget, elements.readerMoveTarget]) {
+        const previous = select.value;
+        select.replaceChildren();
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Klasöre taşı…';
+        select.append(placeholder);
+
+        for (const folder of state.folders) {
+            if (folder.id === state.activeFolder?.id) continue;
+            const option = document.createElement('option');
+            option.value = folder.id;
+            option.textContent = folder.name;
+            select.append(option);
+        }
+
+        if ([...select.options].some((option) => option.value === previous)) {
+            select.value = previous;
+        }
+    }
+}
+
+async function selectFolder(folder) {
+    if (state.loading || state.processing) return;
+    closeReader();
+    clearSelection();
     state.activeFolder = folder;
     elements.folderTitle.textContent = folder.name;
     elements.searchInput.value = '';
     markActiveFolder();
+    renderMoveTargets();
     closeMobileMenu();
     await loadMessages();
 }
 
 async function loadMessages() {
-    if (!state.activeFolder) return;
+    if (!state.activeFolder || state.loading) return;
     state.loading = true;
+    clearSelection();
     elements.refreshButton.classList.add('spinning');
     elements.messageCount.textContent = 'Mailler yükleniyor…';
     elements.pageInfo.textContent = '';
@@ -165,18 +236,24 @@ async function loadMessages() {
     } finally {
         state.loading = false;
         elements.refreshButton.classList.remove('spinning');
+        updateSelectionUi();
     }
 }
 
 function filteredMessages() {
     const term = elements.searchInput.value.trim().toLocaleLowerCase('tr-TR');
     if (!term) return state.messages;
-    return state.messages.filter((message) => [message.from, message.subject, message.preview]
+    return state.messages.filter((message) => [message.from, message.to, message.subject, message.preview, message.body]
         .some((value) => String(value || '').toLocaleLowerCase('tr-TR').includes(term)));
 }
 
 function renderMessages() {
     const messages = filteredMessages();
+    const validIds = new Set(state.messages.map((message) => message.id));
+    for (const id of state.selected) {
+        if (!validIds.has(id)) state.selected.delete(id);
+    }
+
     elements.messageList.replaceChildren();
     const total = state.messages.length;
     elements.messageCount.textContent = elements.searchInput.value.trim()
@@ -188,18 +265,35 @@ function renderMessages() {
             elements.searchInput.value.trim() ? 'Eşleşen mail yok' : 'Bu klasör boş',
             elements.searchInput.value.trim() ? 'Arama kelimenizi değiştirip tekrar deneyin.' : 'Bu klasörde gösterilecek bir mail bulunamadı.'
         );
+        updateSelectionUi();
         return;
     }
 
     const fragment = document.createDocumentFragment();
     messages.forEach((message, index) => fragment.append(createMessageRow(message, index)));
     elements.messageList.append(fragment);
+    updateSelectionUi();
 }
 
 function createMessageRow(message, index) {
     const article = document.createElement('article');
-    article.className = `message-row${message.read ? '' : ' unread'}`;
+    article.className = `message-row${message.read ? '' : ' unread'}${state.selected.has(message.id) ? ' selected' : ''}`;
     article.style.setProperty('--delay', `${Math.min(index, 12) * 18}ms`);
+    article.tabIndex = 0;
+    article.setAttribute('aria-label', `${friendlySender(message.from)}: ${message.subject || 'Konu yok'}`);
+
+    const checkbox = document.createElement('input');
+    checkbox.className = 'message-checkbox';
+    checkbox.type = 'checkbox';
+    checkbox.checked = state.selected.has(message.id);
+    checkbox.setAttribute('aria-label', `${message.subject || 'Konu yok'} mailini seç`);
+    checkbox.addEventListener('click', (event) => event.stopPropagation());
+    checkbox.addEventListener('change', () => {
+        if (checkbox.checked) state.selected.add(message.id);
+        else state.selected.delete(message.id);
+        article.classList.toggle('selected', checkbox.checked);
+        updateSelectionUi();
+    });
 
     const unread = document.createElement('span');
     unread.className = 'unread-dot';
@@ -236,8 +330,41 @@ function createMessageRow(message, index) {
     time.textContent = formatDate(message.date);
     meta.append(time);
 
-    article.append(unread, sender, content, meta);
+    article.append(checkbox, unread, sender, content, meta);
+    article.addEventListener('click', () => openMessage(message));
+    article.addEventListener('keydown', (event) => {
+        if ((event.key === 'Enter' || event.key === ' ') && event.target === article) {
+            event.preventDefault();
+            openMessage(message);
+        }
+    });
     return article;
+}
+
+function updateSelectionUi() {
+    const visible = filteredMessages();
+    const visibleSelected = visible.filter((message) => state.selected.has(message.id)).length;
+    elements.selectAll.disabled = state.loading || visible.length === 0;
+    elements.selectAll.checked = visible.length > 0 && visibleSelected === visible.length;
+    elements.selectAll.indeterminate = visibleSelected > 0 && visibleSelected < visible.length;
+
+    const count = state.selected.size;
+    elements.bulkToolbar.hidden = count === 0;
+    elements.selectedCount.textContent = `${count} mail seçildi`;
+    elements.moveButton.disabled = state.processing || !elements.moveTarget.value;
+    elements.markReadButton.disabled = state.processing;
+    elements.markUnreadButton.disabled = state.processing;
+    elements.deleteButton.disabled = state.processing;
+    elements.clearSelectionButton.disabled = state.processing;
+}
+
+function clearSelection() {
+    state.selected.clear();
+    updateSelectionUi();
+    for (const checkbox of elements.messageList.querySelectorAll('.message-checkbox')) {
+        checkbox.checked = false;
+        checkbox.closest('.message-row')?.classList.remove('selected');
+    }
 }
 
 function friendlySender(value) {
@@ -247,20 +374,207 @@ function friendlySender(value) {
     return String(value).replace(/[<>]/g, '').trim();
 }
 
-function formatDate(value) {
+function formatDate(value, full = false) {
     if (!value) return '';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
 
+    if (full) {
+        return new Intl.DateTimeFormat('tr-TR', {
+            day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+        }).format(date);
+    }
+
     const now = new Date();
-    const sameDay = date.toDateString() === now.toDateString();
-    if (sameDay) {
+    if (date.toDateString() === now.toDateString()) {
         return new Intl.DateTimeFormat('tr-TR', { hour: '2-digit', minute: '2-digit' }).format(date);
     }
     if (date.getFullYear() === now.getFullYear()) {
         return new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'short' }).format(date);
     }
     return new Intl.DateTimeFormat('tr-TR', { day: '2-digit', month: '2-digit', year: '2-digit' }).format(date);
+}
+
+function readableBody(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return 'Bu mailin metin içeriği bulunmuyor.';
+    if (/<\/?[a-z][\s\S]*>/i.test(raw)) {
+        const documentFromMail = new DOMParser().parseFromString(raw, 'text/html');
+        return (documentFromMail.body.textContent || '').replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+    }
+    return raw;
+}
+
+function openMessage(message) {
+    state.readerMessageId = message.id;
+    elements.readerFolder.textContent = state.activeFolder?.name || '';
+    elements.readerSubject.textContent = message.subject || '(Konu yok)';
+    elements.readerFrom.textContent = message.from || 'Bilinmeyen gönderen';
+    elements.readerFrom.title = message.from || '';
+    elements.readerTo.textContent = message.to || '—';
+    elements.readerCc.textContent = message.cc || '—';
+    elements.readerCcRow.hidden = !message.cc;
+    elements.readerDate.textContent = formatDate(message.date, true);
+    elements.readerDate.dateTime = message.date || '';
+    elements.readerAvatar.textContent = (friendlySender(message.from)[0] || '?').toLocaleUpperCase('tr-TR');
+    elements.readerBody.textContent = readableBody(message.body || message.preview);
+    elements.recipientDetails.hidden = true;
+    elements.recipientToggle.setAttribute('aria-expanded', 'false');
+    renderReaderAttachments(message.attachments || []);
+    updateReaderNavigation();
+    elements.readerOverlay.hidden = false;
+    document.body.classList.add('reader-open');
+    requestAnimationFrame(() => elements.readerClose.focus());
+
+    if (!message.read && !state.processing) {
+        markMessages([message.id], true, true);
+    }
+}
+
+function closeReader() {
+    if (!elements.readerOverlay) return;
+    elements.readerOverlay.hidden = true;
+    state.readerMessageId = '';
+    document.body.classList.remove('reader-open');
+}
+
+function readerMessage() {
+    return state.messages.find((message) => message.id === state.readerMessageId) || null;
+}
+
+function renderReaderAttachments(attachments) {
+    elements.readerAttachments.replaceChildren();
+    elements.readerAttachments.hidden = attachments.length === 0;
+    for (const attachment of attachments) {
+        const chip = document.createElement('span');
+        chip.className = 'attachment-chip';
+        const name = document.createElement('strong');
+        name.textContent = `⌇ ${attachment.name || 'Ek'}`;
+        const size = document.createElement('small');
+        size.textContent = attachment.size ? formatBytes(attachment.size) : '';
+        chip.append(name, size);
+        elements.readerAttachments.append(chip);
+    }
+}
+
+function formatBytes(bytes) {
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value <= 0) return '';
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function updateReaderNavigation() {
+    const list = filteredMessages();
+    const index = list.findIndex((message) => message.id === state.readerMessageId);
+    elements.readerPrevious.disabled = index <= 0;
+    elements.readerNext.disabled = index < 0 || index >= list.length - 1;
+    elements.readerUnread.disabled = state.processing;
+    elements.readerDelete.disabled = state.processing;
+    elements.readerMoveButton.disabled = state.processing || !elements.readerMoveTarget.value;
+}
+
+function navigateReader(direction) {
+    const list = filteredMessages();
+    const index = list.findIndex((message) => message.id === state.readerMessageId);
+    const target = list[index + direction];
+    if (target) openMessage(target);
+}
+
+async function markMessages(ids, read, quiet = false) {
+    if (!state.activeFolder || !ids.length || state.processing) return;
+    setProcessing(true);
+    try {
+        await api('mark', {
+            method: 'POST',
+            body: { folderId: state.activeFolder.id, ids, read },
+        });
+        const changed = new Set(ids);
+        for (const message of state.messages) {
+            if (changed.has(message.id)) message.read = read;
+        }
+        renderMessages();
+        if (!quiet) showToast(`${ids.length} mail ${read ? 'okundu' : 'okunmadı'} olarak işaretlendi.`);
+    } catch (error) {
+        handleOperationError(error);
+    } finally {
+        setProcessing(false);
+    }
+}
+
+async function moveMessages(ids, destinationFolderId) {
+    if (!state.activeFolder || !ids.length || !destinationFolderId || state.processing) return;
+    const destination = state.folders.find((folder) => folder.id === destinationFolderId);
+    if (!destination) {
+        showToast('Hedef klasörü seçin.');
+        return;
+    }
+
+    setProcessing(true);
+    try {
+        await api('move', {
+            method: 'POST',
+            body: {
+                folderId: state.activeFolder.id,
+                destinationFolderId,
+                ids,
+            },
+        });
+        removeMessagesLocally(ids);
+        elements.moveTarget.value = '';
+        elements.readerMoveTarget.value = '';
+        showToast(`${ids.length} mail “${destination.name}” klasörüne taşındı.`);
+    } catch (error) {
+        handleOperationError(error);
+    } finally {
+        setProcessing(false);
+    }
+}
+
+async function deleteMessages(ids) {
+    if (!state.activeFolder || !ids.length || state.processing) return;
+    const permanent = state.activeFolder.role === 'trash';
+    if (permanent && !window.confirm(`${ids.length} mail kalıcı olarak silinsin mi? Bu işlem geri alınamaz.`)) {
+        return;
+    }
+
+    setProcessing(true);
+    try {
+        await api('delete', {
+            method: 'POST',
+            body: { folderId: state.activeFolder.id, ids, permanent },
+        });
+        removeMessagesLocally(ids);
+        showToast(permanent ? `${ids.length} mail kalıcı olarak silindi.` : `${ids.length} mail çöp kutusuna taşındı.`);
+    } catch (error) {
+        handleOperationError(error);
+    } finally {
+        setProcessing(false);
+    }
+}
+
+function removeMessagesLocally(ids) {
+    const removed = new Set(ids);
+    state.messages = state.messages.filter((message) => !removed.has(message.id));
+    for (const id of ids) state.selected.delete(id);
+    if (removed.has(state.readerMessageId)) closeReader();
+    renderMessages();
+}
+
+function setProcessing(processing) {
+    state.processing = processing;
+    elements.bulkToolbar.classList.toggle('busy', processing);
+    updateSelectionUi();
+    updateReaderNavigation();
+}
+
+function handleOperationError(error) {
+    if (error.status === 401) {
+        showLogin('Oturumunuz sona erdi. Yeniden giriş yapın.');
+        return;
+    }
+    showToast(`Hata: ${error.message}`);
 }
 
 function renderLoading() {
@@ -304,7 +618,7 @@ function showToast(message) {
     elements.toast.textContent = message;
     elements.toast.classList.add('show');
     window.clearTimeout(showToast.timer);
-    showToast.timer = window.setTimeout(() => elements.toast.classList.remove('show'), 2600);
+    showToast.timer = window.setTimeout(() => elements.toast.classList.remove('show'), 3200);
 }
 
 function closeMobileMenu() {
@@ -322,7 +636,7 @@ elements.loginForm.addEventListener('submit', async (event) => {
             body: { username: elements.username.value, password: elements.password.value },
         });
         elements.password.value = '';
-        showMail(data.username, data.folders || []);
+        showMail(data.username, data.folders || [], data.csrf);
     } catch (error) {
         elements.loginError.textContent = error.message;
         elements.loginError.hidden = false;
@@ -341,8 +655,45 @@ elements.passwordToggle.addEventListener('click', () => {
 
 elements.searchInput.addEventListener('input', renderMessages);
 elements.refreshButton.addEventListener('click', () => {
-    if (!state.loading) loadMessages();
+    if (!state.loading && !state.processing) loadMessages();
 });
+elements.selectAll.addEventListener('change', () => {
+    for (const message of filteredMessages()) {
+        if (elements.selectAll.checked) state.selected.add(message.id);
+        else state.selected.delete(message.id);
+    }
+    renderMessages();
+});
+elements.clearSelectionButton.addEventListener('click', clearSelection);
+elements.markReadButton.addEventListener('click', () => markMessages([...state.selected], true));
+elements.markUnreadButton.addEventListener('click', () => markMessages([...state.selected], false));
+elements.moveTarget.addEventListener('change', updateSelectionUi);
+elements.moveButton.addEventListener('click', () => moveMessages([...state.selected], elements.moveTarget.value));
+elements.deleteButton.addEventListener('click', () => deleteMessages([...state.selected]));
+
+elements.readerClose.addEventListener('click', closeReader);
+elements.readerBackdrop.addEventListener('click', closeReader);
+elements.readerPrevious.addEventListener('click', () => navigateReader(-1));
+elements.readerNext.addEventListener('click', () => navigateReader(1));
+elements.readerUnread.addEventListener('click', () => {
+    const message = readerMessage();
+    if (message) markMessages([message.id], false);
+});
+elements.readerMoveTarget.addEventListener('change', updateReaderNavigation);
+elements.readerMoveButton.addEventListener('click', () => {
+    const message = readerMessage();
+    if (message) moveMessages([message.id], elements.readerMoveTarget.value);
+});
+elements.readerDelete.addEventListener('click', () => {
+    const message = readerMessage();
+    if (message) deleteMessages([message.id]);
+});
+elements.recipientToggle.addEventListener('click', () => {
+    const expanded = elements.recipientToggle.getAttribute('aria-expanded') === 'true';
+    elements.recipientToggle.setAttribute('aria-expanded', String(!expanded));
+    elements.recipientDetails.hidden = expanded;
+});
+
 elements.logoutButton.addEventListener('click', async () => {
     try {
         await api('logout', { method: 'POST' });
@@ -363,13 +714,16 @@ document.addEventListener('keydown', (event) => {
         event.preventDefault();
         elements.searchInput.focus();
     }
-    if (event.key === 'Escape') closeMobileMenu();
+    if (event.key === 'Escape') {
+        if (!elements.readerOverlay.hidden) closeReader();
+        else closeMobileMenu();
+    }
 });
 
 (async function boot() {
     try {
         const data = await api('folders');
-        showMail(data.username, data.folders || []);
+        showMail(data.username, data.folders || [], data.csrf);
     } catch (_) {
         showLogin();
     }

@@ -16,6 +16,10 @@ session_set_cookie_params([
 ]);
 session_start();
 
+if (!isset($_SESSION['csrf_token']) || !is_string($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(24));
+}
+
 require_once __DIR__ . '/lib/EasClient.php';
 $config = require __DIR__ . '/config.php';
 
@@ -48,6 +52,35 @@ function requireMethod(string $method): void
         header('Allow: ' . $method);
         respond(['ok' => false, 'message' => 'Bu işlem için geçersiz istek yöntemi.'], 405);
     }
+}
+
+function requireCsrf(): void
+{
+    $provided = (string) ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+    $expected = (string) ($_SESSION['csrf_token'] ?? '');
+    if ($provided === '' || $expected === '' || !hash_equals($expected, $provided)) {
+        respond(['ok' => false, 'message' => 'Güvenlik doğrulaması başarısız. Sayfayı yenileyip tekrar deneyin.'], 419);
+    }
+}
+
+/** @param array<string, mixed> $body
+ *  @return list<string>
+ */
+function operationIds(array $body): array
+{
+    $ids = $body['ids'] ?? null;
+    if (!is_array($ids) || $ids === [] || count($ids) > 200) {
+        respond(['ok' => false, 'message' => 'Bir işlemde 1 ile 200 arasında mail seçebilirsiniz.'], 400);
+    }
+
+    $clean = [];
+    foreach ($ids as $id) {
+        if (!is_string($id) || trim($id) === '' || strlen($id) > 512) {
+            respond(['ok' => false, 'message' => 'Geçersiz mail seçimi.'], 400);
+        }
+        $clean[trim($id)] = trim($id);
+    }
+    return array_values($clean);
 }
 
 /** @return array{username:string,password:string} */
@@ -89,6 +122,7 @@ try {
             'ok' => true,
             'authenticated' => isset($_SESSION['mail_auth']['username']),
             'username' => (string) ($_SESSION['mail_auth']['username'] ?? ''),
+            'csrf' => isset($_SESSION['mail_auth']['username']) ? (string) $_SESSION['csrf_token'] : '',
         ]);
     }
 
@@ -110,16 +144,19 @@ try {
             'username' => $username,
             'password' => $password,
         ];
+        $_SESSION['sync_keys'] = [];
 
         respond([
             'ok' => true,
             'username' => $username,
             'folders' => $folders,
+            'csrf' => (string) $_SESSION['csrf_token'],
         ]);
     }
 
     if ($action === 'logout') {
         requireMethod('POST');
+        requireCsrf();
         clearMailSession();
         respond(['ok' => true]);
     }
@@ -133,6 +170,7 @@ try {
             'ok' => true,
             'username' => $auth['username'],
             'folders' => $client->listFolders(),
+            'csrf' => (string) $_SESSION['csrf_token'],
         ]);
     }
 
@@ -140,7 +178,40 @@ try {
         requireMethod('GET');
         $folderId = trim((string) ($_GET['folderId'] ?? ''));
         $result = $client->listMessages($folderId);
+        $_SESSION['sync_keys'][$folderId] = $result['syncKey'];
+        unset($result['syncKey']);
         respond(['ok' => true] + $result);
+    }
+
+    if (in_array($action, ['delete', 'mark', 'move'], true)) {
+        requireMethod('POST');
+        requireCsrf();
+        $body = jsonBody();
+        $folderId = trim((string) ($body['folderId'] ?? ''));
+        $ids = operationIds($body);
+
+        if ($action === 'move') {
+            $destinationFolderId = trim((string) ($body['destinationFolderId'] ?? ''));
+            $count = $client->moveMessages($folderId, $destinationFolderId, $ids);
+            respond(['ok' => true, 'count' => $count]);
+        }
+
+        $syncKey = (string) ($_SESSION['sync_keys'][$folderId] ?? '');
+        if ($syncKey === '') {
+            respond(['ok' => false, 'message' => 'Klasör işlem için hazır değil. Yenileyip tekrar deneyin.'], 409);
+        }
+
+        if ($action === 'delete') {
+            $permanent = (bool) ($body['permanent'] ?? false);
+            $nextSyncKey = $client->deleteMessages($folderId, $syncKey, $ids, !$permanent);
+            $_SESSION['sync_keys'][$folderId] = $nextSyncKey;
+            respond(['ok' => true, 'count' => count($ids)]);
+        }
+
+        $read = (bool) ($body['read'] ?? false);
+        $nextSyncKey = $client->setReadState($folderId, $syncKey, $ids, $read);
+        $_SESSION['sync_keys'][$folderId] = $nextSyncKey;
+        respond(['ok' => true, 'count' => count($ids), 'read' => $read]);
     }
 
     respond(['ok' => false, 'message' => 'İşlem bulunamadı.'], 404);

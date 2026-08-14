@@ -35,6 +35,10 @@ final class EasClient
             17 => 'DisplayTo', 18 => 'Importance', 19 => 'MessageClass', 20 => 'Subject',
             21 => 'Read', 22 => 'To', 23 => 'Cc', 24 => 'From', 25 => 'ReplyTo',
         ],
+        5 => [
+            5 => 'MoveItems', 6 => 'Move', 7 => 'SrcMsgId', 8 => 'SrcFldId',
+            9 => 'DstFldId', 10 => 'Response', 11 => 'Status', 12 => 'DstMsgId',
+        ],
         7 => [
             7 => 'DisplayName', 8 => 'ServerId', 9 => 'ParentId', 10 => 'Type',
             12 => 'Status', 14 => 'Changes', 15 => 'Add', 16 => 'Delete',
@@ -136,7 +140,7 @@ final class EasClient
     }
 
     /**
-     * @return array{messages:list<array<string,mixed>>,moreAvailable:bool,pages:int}
+     * @return array{messages:list<array<string,mixed>>,moreAvailable:bool,pages:int,syncKey:string}
      */
     public function listMessages(string $folderId): array
     {
@@ -187,7 +191,95 @@ final class EasClient
             'messages' => $messages,
             'moreAvailable' => $moreAvailable,
             'pages' => $pages,
+            'syncKey' => $syncKey,
         ];
+    }
+
+    /**
+     * @param list<string> $messageIds
+     */
+    public function deleteMessages(string $folderId, string $syncKey, array $messageIds, bool $deletesAsMoves = true): string
+    {
+        $ids = $this->validateOperationIds($folderId, $messageIds);
+        if ($syncKey === '' || strlen($syncKey) > 512) {
+            throw new InvalidArgumentException('Klasör eşitleme anahtarı geçersiz. Klasörü yenileyip tekrar deneyin.');
+        }
+
+        $commands = '';
+        foreach ($ids as $messageId) {
+            $commands .= $this->tag(0, 9,
+                $this->tag(0, 13, $this->inlineText($messageId))
+            );
+        }
+
+        return $this->applySyncMutation($folderId, $syncKey, $commands, $deletesAsMoves);
+    }
+
+    /**
+     * @param list<string> $messageIds
+     */
+    public function setReadState(string $folderId, string $syncKey, array $messageIds, bool $read): string
+    {
+        $ids = $this->validateOperationIds($folderId, $messageIds);
+        if ($syncKey === '' || strlen($syncKey) > 512) {
+            throw new InvalidArgumentException('Klasör eşitleme anahtarı geçersiz. Klasörü yenileyip tekrar deneyin.');
+        }
+
+        $commands = '';
+        foreach ($ids as $messageId) {
+            $commands .= $this->tag(0, 8,
+                $this->tag(0, 13, $this->inlineText($messageId)) .
+                $this->tag(0, 29,
+                    $this->tag(2, 21, $this->inlineText($read ? '1' : '0'))
+                )
+            );
+        }
+
+        return $this->applySyncMutation($folderId, $syncKey, $commands, false);
+    }
+
+    /**
+     * @param list<string> $messageIds
+     */
+    public function moveMessages(string $sourceFolderId, string $destinationFolderId, array $messageIds): int
+    {
+        $ids = $this->validateOperationIds($sourceFolderId, $messageIds);
+        if ($destinationFolderId === '' || strlen($destinationFolderId) > 512) {
+            throw new InvalidArgumentException('Hedef klasör geçersiz.');
+        }
+        if (hash_equals($sourceFolderId, $destinationFolderId)) {
+            throw new InvalidArgumentException('Kaynak ve hedef klasör aynı olamaz.');
+        }
+
+        $moves = '';
+        foreach ($ids as $messageId) {
+            $moves .= $this->tag(5, 6,
+                $this->tag(5, 7, $this->inlineText($messageId)) .
+                $this->tag(5, 8, $this->inlineText($sourceFolderId)) .
+                $this->tag(5, 9, $this->inlineText($destinationFolderId))
+            );
+        }
+
+        $tree = $this->request('MoveItems', $this->document($this->tag(5, 5, $moves)));
+        $responses = $this->findNodes($tree, 'Response');
+        $failed = [];
+        foreach ($responses as $response) {
+            $status = $this->firstText($response, 'Status');
+            if ($status !== '3') {
+                $failed[] = $status !== '' ? $status : '?';
+            }
+        }
+
+        if ($responses === []) {
+            $status = $this->firstText($tree, 'Status');
+            if ($status !== '3') {
+                throw new RuntimeException('Exchange taşıma hatası: ' . ($status !== '' ? $status : 'yanıt yok'));
+            }
+        } elseif ($failed !== []) {
+            throw new RuntimeException('Bazı mailler taşınamadı. Exchange durum kodları: ' . implode(', ', $failed));
+        }
+
+        return count($ids);
     }
 
     /** @return array<string, mixed> */
@@ -247,6 +339,80 @@ final class EasClient
             6 => 'outbox',
             default => 'other',
         };
+    }
+
+    /**
+     * @param list<string> $messageIds
+     * @return list<string>
+     */
+    private function validateOperationIds(string $folderId, array $messageIds): array
+    {
+        if ($folderId === '' || strlen($folderId) > 512) {
+            throw new InvalidArgumentException('Klasör kimliği geçersiz.');
+        }
+        if ($messageIds === [] || count($messageIds) > 200) {
+            throw new InvalidArgumentException('Bir işlemde 1 ile 200 arasında mail seçebilirsiniz.');
+        }
+
+        $clean = [];
+        foreach ($messageIds as $messageId) {
+            if (!is_string($messageId)) {
+                throw new InvalidArgumentException('Mail kimliği geçersiz.');
+            }
+            $id = trim($messageId);
+            if ($id === '' || strlen($id) > 512) {
+                throw new InvalidArgumentException('Mail kimliği geçersiz.');
+            }
+            $clean[$id] = $id;
+        }
+        return array_values($clean);
+    }
+
+    private function applySyncMutation(string $folderId, string $syncKey, string $commands, bool $deletesAsMoves): string
+    {
+        $collection =
+            $this->tag(0, 11, $this->inlineText($syncKey)) .
+            $this->tag(0, 18, $this->inlineText($folderId));
+
+        if ($deletesAsMoves) {
+            $collection .= $this->tag(0, 30);
+        }
+        $collection .= $this->tag(0, 22, $commands);
+
+        $tree = $this->request('Sync', $this->document(
+            $this->tag(0, 5,
+                $this->tag(0, 28,
+                    $this->tag(0, 15, $collection)
+                )
+            )
+        ));
+
+        $responseCollection = $this->findNodes($tree, 'Collection')[0] ?? $tree;
+        $status = $this->directChild($responseCollection, 'Status')?->text ?? '';
+        if ($status !== '' && $status !== '1') {
+            $hint = in_array($status, ['3', '9'], true) ? ' Klasörü yenileyip tekrar deneyin.' : '';
+            throw new RuntimeException("Exchange işlem hatası: {$status}.{$hint}");
+        }
+
+        $responsesNode = $this->directChild($responseCollection, 'Responses');
+        if ($responsesNode !== null) {
+            $failed = [];
+            foreach ($responsesNode->children as $response) {
+                $itemStatus = $this->firstText($response, 'Status');
+                if ($itemStatus !== '' && $itemStatus !== '1') {
+                    $failed[] = $itemStatus;
+                }
+            }
+            if ($failed !== []) {
+                throw new RuntimeException('Bazı maillerde işlem tamamlanamadı. Exchange durum kodları: ' . implode(', ', $failed));
+            }
+        }
+
+        $nextSyncKey = $this->directChild($responseCollection, 'SyncKey')?->text ?? '';
+        if ($nextSyncKey === '') {
+            throw new RuntimeException('Exchange işlemden sonra eşitleme anahtarını vermedi.');
+        }
+        return $nextSyncKey;
     }
 
     private function folderSyncPayload(): string
