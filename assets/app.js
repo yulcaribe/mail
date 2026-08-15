@@ -231,10 +231,14 @@ function renderFolders() {
         const expander = document.createElement('button');
         expander.type = 'button';
         expander.className = 'folder-expander';
-        expander.hidden = children.length === 0;
         expander.setAttribute('aria-label', `${folder.name} alt klasörlerini aç veya kapat`);
         expander.setAttribute('aria-expanded', String(state.expandedFolderIds.has(folder.id)));
         expander.textContent = '›';
+        if (children.length === 0) {
+            expander.classList.add('placeholder');
+            expander.setAttribute('aria-hidden', 'true');
+            expander.tabIndex = -1;
+        }
 
         const button = document.createElement('button');
         button.type = 'button';

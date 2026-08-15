@@ -367,9 +367,9 @@ noscript {
     transform: rotate(90deg);
 }
 
-.folder-expander[hidden] {
-    display: block;
+.folder-expander.placeholder {
     visibility: hidden;
+    pointer-events: none;
 }
 
 .nav-label {
