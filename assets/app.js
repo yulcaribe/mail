@@ -4,6 +4,7 @@ const state = {
     username: '',
     csrf: '',
     folders: [],
+    expandedFolderIds: new Set(),
     activeFolder: null,
     messages: [],
     selected: new Set(),
@@ -151,6 +152,7 @@ function showLogin(message = '') {
     state.username = '';
     state.csrf = '';
     state.folders = [];
+    state.expandedFolderIds.clear();
     state.activeFolder = null;
     state.messages = [];
     state.selected.clear();
@@ -173,6 +175,11 @@ function showMail(username, folders, csrf) {
     state.username = username;
     state.csrf = csrf || '';
     state.folders = folders;
+    state.expandedFolderIds = new Set(
+        folders
+            .map((folder) => folder.parentId)
+            .filter((parentId) => folders.some((folder) => folder.id === parentId)),
+    );
     state.rulesLoaded = false;
     elements.loginView.hidden = true;
     elements.mailView.hidden = false;
@@ -193,7 +200,42 @@ function showMail(username, folders, csrf) {
 
 function renderFolders() {
     elements.folderList.replaceChildren();
+
+    const foldersById = new Map(state.folders.map((folder) => [folder.id, folder]));
+    const childrenByParent = new Map();
+    const roots = [];
+
     for (const folder of state.folders) {
+        if (folder.parentId && folder.parentId !== folder.id && foldersById.has(folder.parentId)) {
+            const children = childrenByParent.get(folder.parentId) || [];
+            children.push(folder);
+            childrenByParent.set(folder.parentId, children);
+        } else {
+            roots.push(folder);
+        }
+    }
+
+    const rendered = new Set();
+    const renderBranch = (folder, depth = 0) => {
+        if (rendered.has(folder.id)) return null;
+        rendered.add(folder.id);
+
+        const children = childrenByParent.get(folder.id) || [];
+        const branch = document.createElement('div');
+        branch.className = 'folder-branch';
+        branch.style.setProperty('--folder-depth', String(depth));
+
+        const row = document.createElement('div');
+        row.className = 'folder-row';
+
+        const expander = document.createElement('button');
+        expander.type = 'button';
+        expander.className = 'folder-expander';
+        expander.hidden = children.length === 0;
+        expander.setAttribute('aria-label', `${folder.name} alt klasörlerini aç veya kapat`);
+        expander.setAttribute('aria-expanded', String(state.expandedFolderIds.has(folder.id)));
+        expander.textContent = '›';
+
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'folder-button';
@@ -209,9 +251,59 @@ function renderFolders() {
 
         button.append(icon, label);
         button.addEventListener('click', () => selectFolder(folder));
-        elements.folderList.append(button);
+
+        row.append(expander, button);
+        branch.append(row);
+
+        if (children.length) {
+            const childList = document.createElement('div');
+            childList.className = 'folder-children';
+            childList.hidden = !state.expandedFolderIds.has(folder.id);
+            for (const child of children) {
+                const childBranch = renderBranch(child, depth + 1);
+                if (childBranch) childList.append(childBranch);
+            }
+            branch.append(childList);
+
+            expander.addEventListener('click', () => {
+                const expanded = !state.expandedFolderIds.has(folder.id);
+                if (expanded) state.expandedFolderIds.add(folder.id);
+                else state.expandedFolderIds.delete(folder.id);
+                childList.hidden = !expanded;
+                expander.setAttribute('aria-expanded', String(expanded));
+            });
+        }
+
+        return branch;
+    };
+
+    for (const folder of roots) {
+        const branch = renderBranch(folder);
+        if (branch) elements.folderList.append(branch);
+    }
+    // Bozuk veya döngüsel bir parentId gelirse klasörü görünmez bırakma.
+    for (const folder of state.folders) {
+        if (!rendered.has(folder.id)) {
+            const branch = renderBranch(folder);
+            if (branch) elements.folderList.append(branch);
+        }
     }
     markActiveFolder();
+}
+
+function folderPath(folder) {
+    const foldersById = new Map(state.folders.map((item) => [item.id, item]));
+    const names = [];
+    const visited = new Set();
+    let current = folder;
+
+    while (current && !visited.has(current.id) && names.length < 20) {
+        visited.add(current.id);
+        names.unshift(current.name);
+        current = foldersById.get(current.parentId);
+    }
+
+    return names.join(' › ');
 }
 
 function markActiveFolder() {
@@ -234,7 +326,7 @@ function renderMoveTargets() {
             if (folder.id === state.activeFolder?.id) continue;
             const option = document.createElement('option');
             option.value = folder.id;
-            option.textContent = folder.name;
+            option.textContent = folderPath(folder);
             select.append(option);
         }
 
@@ -249,7 +341,7 @@ async function selectFolder(folder) {
     closeReader();
     clearSelection();
     state.activeFolder = folder;
-    elements.folderTitle.textContent = folder.name;
+    elements.folderTitle.textContent = folderPath(folder);
     elements.searchInput.value = '';
     markActiveFolder();
     renderMoveTargets();
@@ -453,7 +545,7 @@ function readableBody(value) {
 
 function openMessage(message) {
     state.readerMessageId = message.id;
-    elements.readerFolder.textContent = state.activeFolder?.name || '';
+    elements.readerFolder.textContent = state.activeFolder ? folderPath(state.activeFolder) : '';
     elements.readerSubject.textContent = message.subject || '(Konu yok)';
     elements.readerFrom.textContent = message.from || 'Bilinmeyen gönderen';
     elements.readerFrom.title = message.from || '';
@@ -573,7 +665,7 @@ async function moveMessages(ids, destinationFolderId) {
         removeMessagesLocally(ids);
         elements.moveTarget.value = '';
         elements.readerMoveTarget.value = '';
-        showToast(`${ids.length} mail “${destination.name}” klasörüne taşındı.`);
+        showToast(`${ids.length} mail “${folderPath(destination)}” klasörüne taşındı.`);
     } catch (error) {
         handleOperationError(error);
     } finally {
