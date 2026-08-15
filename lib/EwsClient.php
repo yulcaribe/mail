@@ -90,6 +90,89 @@ final class EwsClient
     }
 
     /**
+     * Normal posta klasörlerinde belirtilen tarihten önce alınmış mailleri
+     * Çöp Kutusu'na taşır. Gönderilenler, Taslaklar, Giden Kutusu ve Çöp
+     * Kutusu ile bunların alt klasörleri bu işlemden özellikle hariç tutulur.
+     *
+     * @return array{count:int,more:bool,folderCount:int}
+     */
+    public function moveReceivedMessagesBefore(DateTimeInterface $cutoff, int $limit = 500): array
+    {
+        if ($limit < 1 || $limit > 2000) {
+            throw new InvalidArgumentException('Temizlik işlem sınırı geçersiz.');
+        }
+
+        $folders = $this->listMailFolders();
+        $foldersById = [];
+        foreach ($folders as $folder) {
+            $foldersById[$folder['id']] = $folder;
+        }
+
+        $specialFolders = $this->distinguishedFolderIds([
+            'sentitems',
+            'drafts',
+            'outbox',
+            'deleteditems',
+        ]);
+        $excludedRoots = array_fill_keys(array_values($specialFolders), true);
+        $targetFolderIds = [];
+        foreach ($folders as $folder) {
+            if (!$this->folderIsWithinRoots($folder['id'], $excludedRoots, $foldersById)) {
+                $targetFolderIds[] = $folder['id'];
+            }
+        }
+
+        if ($targetFolderIds === []) {
+            return ['count' => 0, 'more' => false, 'folderCount' => 0];
+        }
+
+        $found = $this->findReceivedItemIdsBefore($targetFolderIds, $cutoff, $limit);
+        if ($found['ids'] !== []) {
+            $this->moveItemsToDeletedItems($found['ids']);
+        }
+
+        return [
+            'count' => count($found['ids']),
+            'more' => $found['more'],
+            'folderCount' => count($targetFolderIds),
+        ];
+    }
+
+    /**
+     * Çöp Kutusu'ndaki bütün öğeleri Exchange tarafında kalıcı siler. Alt
+     * klasör yapısını korumak için DeleteSubFolders bilerek false bırakılır.
+     */
+    public function emptyDeletedItems(): void
+    {
+        $deletedItemsId = $this->distinguishedFolderIds(['deleteditems'])['deleteditems'];
+        $folders = $this->listMailFolders();
+        $foldersById = [];
+        foreach ($folders as $folder) {
+            $foldersById[$folder['id']] = $folder;
+        }
+
+        $roots = [$deletedItemsId => true];
+        $folderIds = [$deletedItemsId => $deletedItemsId];
+        foreach ($folders as $folder) {
+            if ($this->folderIsWithinRoots($folder['id'], $roots, $foldersById)) {
+                $folderIds[$folder['id']] = $folder['id'];
+            }
+        }
+
+        // Her klasörü ayrı hedefleyip alt klasör yapısını korurken içlerindeki
+        // bütün öğeleri kalıcı olarak temizle.
+        foreach (array_chunk(array_values($folderIds), 50) as $chunk) {
+            $ids = '';
+            foreach ($chunk as $folderId) {
+                $ids .= '<t:FolderId Id="' . $this->xml($folderId) . '" />';
+            }
+            $body = '<m:EmptyFolder DeleteType="HardDelete" DeleteSubFolders="false">' .
+                '<m:FolderIds>' . $ids . '</m:FolderIds></m:EmptyFolder>';
+            $this->request('EmptyFolder', $body);
+        }
+    }
+
+    /**
      * @param list<array{id:string,changeKey:string,parentId:string,name:string,path:string}> $folders
      * @return array{rules:list<array<string,mixed>>,raw:array<string,string>,outlookRuleBlobExists:bool}
      */
@@ -399,6 +482,141 @@ final class EwsClient
         return $result;
     }
 
+    /** @param list<string> $names
+     *  @return array<string,string>
+     */
+    private function distinguishedFolderIds(array $names): array
+    {
+        $folderIds = '';
+        foreach ($names as $name) {
+            $folderIds .= '<t:DistinguishedFolderId Id="' . $this->xml($name) . '" />';
+        }
+        $body = '<m:GetFolder><m:FolderShape><t:BaseShape>IdOnly</t:BaseShape></m:FolderShape>' .
+            '<m:FolderIds>' . $folderIds . '</m:FolderIds></m:GetFolder>';
+        $document = $this->request('GetFolder', $body);
+        $xpath = $this->xpath($document);
+        $responses = $xpath->query('//m:GetFolderResponse/m:ResponseMessages/m:GetFolderResponseMessage');
+        $result = [];
+
+        if ($responses !== false) {
+            foreach ($responses as $index => $response) {
+                if (!$response instanceof DOMElement || !isset($names[$index])) {
+                    continue;
+                }
+                $code = $this->text($xpath, './m:ResponseCode', $response);
+                if ($code !== 'NoError') {
+                    $message = $this->text($xpath, './m:MessageText', $response);
+                    throw new RuntimeException('Exchange klasör kimliği alınamadı: ' . $code . ($message !== '' ? ' — ' . $message : ''));
+                }
+                $idNode = $xpath->query('./m:Folders/*/t:FolderId', $response)?->item(0);
+                if ($idNode instanceof DOMElement && $idNode->getAttribute('Id') !== '') {
+                    $result[$names[$index]] = $idNode->getAttribute('Id');
+                }
+            }
+        }
+
+        if (count($result) !== count($names)) {
+            throw new RuntimeException('Exchange özel posta klasörlerinin tümünü döndürmedi.');
+        }
+        return $result;
+    }
+
+    /**
+     * @param array<string,bool> $roots
+     * @param array<string,array{id:string,changeKey:string,parentId:string,name:string,path:string}> $folders
+     */
+    private function folderIsWithinRoots(string $folderId, array $roots, array $folders): bool
+    {
+        $current = $folderId;
+        $seen = [];
+        while ($current !== '' && !isset($seen[$current])) {
+            if (isset($roots[$current])) {
+                return true;
+            }
+            $seen[$current] = true;
+            $current = $folders[$current]['parentId'] ?? '';
+        }
+        return false;
+    }
+
+    /** @param list<string> $folderIds
+     *  @return array{ids:list<string>,more:bool}
+     */
+    private function findReceivedItemIdsBefore(array $folderIds, DateTimeInterface $cutoff, int $limit): array
+    {
+        $cutoffUtc = DateTimeImmutable::createFromInterface($cutoff)
+            ->setTimezone(new DateTimeZone('UTC'))
+            ->format('Y-m-d\TH:i:s\Z');
+        $ids = [];
+        $more = false;
+
+        foreach (array_chunk($folderIds, 25) as $folderChunk) {
+            $parentFolders = '';
+            foreach ($folderChunk as $folderId) {
+                $parentFolders .= '<t:FolderId Id="' . $this->xml($folderId) . '" />';
+            }
+            $body = '<m:FindItem Traversal="Shallow">' .
+                '<m:ItemShape><t:BaseShape>IdOnly</t:BaseShape></m:ItemShape>' .
+                '<m:IndexedPageItemView MaxEntriesReturned="100" Offset="0" BasePoint="Beginning" />' .
+                '<m:Restriction><t:IsLessThan>' .
+                '<t:FieldURI FieldURI="item:DateTimeReceived" />' .
+                '<t:FieldURIOrConstant><t:Constant Value="' . $this->xml($cutoffUtc) . '" /></t:FieldURIOrConstant>' .
+                '</t:IsLessThan></m:Restriction>' .
+                '<m:ParentFolderIds>' . $parentFolders . '</m:ParentFolderIds>' .
+                '</m:FindItem>';
+            $document = $this->request('FindItem', $body);
+            $xpath = $this->xpath($document);
+            $responses = $xpath->query('//m:FindItemResponse/m:ResponseMessages/m:FindItemResponseMessage');
+
+            if ($responses === false) {
+                continue;
+            }
+            foreach ($responses as $response) {
+                if (!$response instanceof DOMElement) {
+                    continue;
+                }
+                $code = $this->text($xpath, './m:ResponseCode', $response);
+                if ($code !== 'NoError') {
+                    $message = $this->text($xpath, './m:MessageText', $response);
+                    throw new RuntimeException('Exchange mail araması başarısız: ' . $code . ($message !== '' ? ' — ' . $message : ''));
+                }
+                $root = $xpath->query('./m:RootFolder', $response)?->item(0);
+                if ($root instanceof DOMElement && strtolower($root->getAttribute('IncludesLastItemInRange')) === 'false') {
+                    $more = true;
+                }
+                $itemNodes = $xpath->query('./m:RootFolder/t:Items/*/t:ItemId', $response);
+                if ($itemNodes === false) {
+                    continue;
+                }
+                foreach ($itemNodes as $itemNode) {
+                    if (!$itemNode instanceof DOMElement || $itemNode->getAttribute('Id') === '') {
+                        continue;
+                    }
+                    $ids[$itemNode->getAttribute('Id')] = $itemNode->getAttribute('Id');
+                    if (count($ids) >= $limit) {
+                        return ['ids' => array_values($ids), 'more' => true];
+                    }
+                }
+            }
+        }
+
+        return ['ids' => array_values($ids), 'more' => $ids !== [] && $more];
+    }
+
+    /** @param list<string> $itemIds */
+    private function moveItemsToDeletedItems(array $itemIds): void
+    {
+        foreach (array_chunk($itemIds, 100) as $chunk) {
+            $ids = '';
+            foreach ($chunk as $itemId) {
+                $ids .= '<t:ItemId Id="' . $this->xml($itemId) . '" />';
+            }
+            $body = '<m:DeleteItem DeleteType="MoveToDeletedItems" SuppressReadReceipts="true">' .
+                '<m:ItemIds>' . $ids . '</m:ItemIds></m:DeleteItem>';
+            $this->request('DeleteItem', $body);
+        }
+    }
+
     /** @param array<string,array{id:string,changeKey:string,parentId:string,name:string,path:string}> $folders */
     private function folderPath(string $id, array $folders): string
     {
@@ -420,7 +638,7 @@ final class EwsClient
         }
         $curlInfo = curl_version();
         if (defined('CURL_VERSION_NTLM') && (((int) ($curlInfo['features'] ?? 0)) & CURL_VERSION_NTLM) === 0) {
-            throw new RuntimeException('Hostingde cURL NTLM desteği etkin değil; Exchange kuralları okunamaz.');
+            throw new RuntimeException('Hostingde cURL NTLM desteği etkin değil; Exchange EWS işlemleri kullanılamaz.');
         }
 
         $soap = '<?xml version="1.0" encoding="utf-8"?>' .
@@ -478,12 +696,18 @@ final class EwsClient
         $xpath = $this->xpath($document);
         $fault = $this->text($xpath, '//soap:Fault/faultstring');
         if ($fault !== '') {
-            throw new RuntimeException('Exchange kural servisi hatası: ' . mb_substr($fault, 0, 300, 'UTF-8'));
+            throw new RuntimeException('Exchange EWS hatası: ' . mb_substr($fault, 0, 300, 'UTF-8'));
         }
-        $responseCode = $this->text($xpath, '//*[local-name()="ResponseCode"]');
-        if ($responseCode !== '' && $responseCode !== 'NoError') {
-            $message = $this->text($xpath, '//*[local-name()="MessageText"]');
-            throw new RuntimeException('Exchange kural hatası: ' . $responseCode . ($message !== '' ? ' — ' . $message : ''));
+        $responseCodes = $xpath->query('//*[local-name()="ResponseCode"]');
+        if ($responseCodes !== false) {
+            foreach ($responseCodes as $responseCodeNode) {
+                $responseCode = trim((string) $responseCodeNode->textContent);
+                if ($responseCode === '' || $responseCode === 'NoError') {
+                    continue;
+                }
+                $message = $this->text($xpath, './*[local-name()="MessageText"]', $responseCodeNode->parentNode);
+                throw new RuntimeException('Exchange EWS hatası: ' . $responseCode . ($message !== '' ? ' — ' . $message : ''));
+            }
         }
         return $document;
     }

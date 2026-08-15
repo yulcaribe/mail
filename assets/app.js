@@ -15,6 +15,7 @@ const state = {
     rulesLoading: false,
     rulesBusy: false,
     outlookRuleBlobExists: false,
+    cleanupBusy: false,
     loading: false,
     processing: false,
 };
@@ -37,6 +38,8 @@ const elements = {
     pageInfo: document.querySelector('#pageInfo'),
     searchInput: document.querySelector('#searchInput'),
     refreshButton: document.querySelector('#refreshButton'),
+    mailboxCleanupButton: document.querySelector('#mailboxCleanupButton'),
+    emptyTrashButton: document.querySelector('#emptyTrashButton'),
     logoutButton: document.querySelector('#logoutButton'),
     menuButton: document.querySelector('#menuButton'),
     sidebar: document.querySelector('#sidebar'),
@@ -78,6 +81,16 @@ const elements = {
     settingsClose: document.querySelector('#settingsClose'),
     settingsAvatar: document.querySelector('#settingsAvatar'),
     settingsUsername: document.querySelector('#settingsUsername'),
+    cleanupOverlay: document.querySelector('#cleanupOverlay'),
+    cleanupBackdrop: document.querySelector('#cleanupBackdrop'),
+    cleanupClose: document.querySelector('#cleanupClose'),
+    cleanupForm: document.querySelector('#cleanupForm'),
+    cleanupHours: document.querySelector('#cleanupHours'),
+    cleanupCutoffText: document.querySelector('#cleanupCutoffText'),
+    cleanupProgress: document.querySelector('#cleanupProgress'),
+    cleanupError: document.querySelector('#cleanupError'),
+    cleanupCancel: document.querySelector('#cleanupCancel'),
+    cleanupSubmit: document.querySelector('#cleanupSubmit'),
     rulesWarning: document.querySelector('#rulesWarning'),
     rulesStatus: document.querySelector('#rulesStatus'),
     rulesList: document.querySelector('#rulesList'),
@@ -160,9 +173,11 @@ function showLogin(message = '') {
     state.ruleFolders = [];
     state.rulesLoaded = false;
     state.outlookRuleBlobExists = false;
+    state.cleanupBusy = false;
     closeReader();
     closeRuleEditor();
     closeSettings();
+    closeCleanup(true);
     elements.mailView.hidden = true;
     elements.loginView.hidden = false;
     elements.loginError.textContent = message;
@@ -348,6 +363,7 @@ async function selectFolder(folder) {
     elements.folderTitle.textContent = folderPath(folder);
     elements.searchInput.value = '';
     markActiveFolder();
+    updateMailboxActions();
     renderMoveTargets();
     closeMobileMenu();
     await loadMessages();
@@ -710,6 +726,8 @@ function removeMessagesLocally(ids) {
 function setProcessing(processing) {
     state.processing = processing;
     elements.bulkToolbar.classList.toggle('busy', processing);
+    elements.mailboxCleanupButton.disabled = processing || state.cleanupBusy;
+    elements.emptyTrashButton.disabled = processing;
     updateSelectionUi();
     updateReaderNavigation();
 }
@@ -720,6 +738,132 @@ function handleOperationError(error) {
         return;
     }
     showToast(`Hata: ${error.message}`);
+}
+
+function updateMailboxActions() {
+    elements.emptyTrashButton.hidden = state.activeFolder?.role !== 'trash';
+}
+
+function updateCleanupCutoff() {
+    const hours = Number(elements.cleanupHours.value) || 1;
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+    elements.cleanupCutoffText.textContent = new Intl.DateTimeFormat('tr-TR', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(cutoff);
+}
+
+function openCleanup() {
+    if (state.processing || state.cleanupBusy) return;
+    closeReader();
+    closeMobileMenu();
+    elements.cleanupError.hidden = true;
+    elements.cleanupProgress.hidden = true;
+    elements.cleanupProgress.textContent = '';
+    updateCleanupCutoff();
+    elements.cleanupOverlay.hidden = false;
+    document.body.classList.add('cleanup-open');
+    requestAnimationFrame(() => elements.cleanupHours.focus());
+}
+
+function closeCleanup(force = false) {
+    if (!elements.cleanupOverlay || (state.cleanupBusy && !force)) return;
+    elements.cleanupOverlay.hidden = true;
+    document.body.classList.remove('cleanup-open');
+}
+
+function setCleanupBusy(busy) {
+    state.cleanupBusy = busy;
+    elements.cleanupHours.disabled = busy;
+    elements.cleanupClose.disabled = busy;
+    elements.cleanupCancel.disabled = busy;
+    elements.cleanupSubmit.disabled = busy;
+    elements.cleanupSubmit.textContent = busy ? 'Mailler taşınıyor…' : 'Eski mailleri Çöp Kutusu’na taşı';
+    elements.mailboxCleanupButton.disabled = busy || state.processing;
+}
+
+async function cleanMailbox() {
+    if (state.cleanupBusy || state.processing) return;
+    const hours = Number(elements.cleanupHours.value);
+    if (!Number.isInteger(hours) || hours < 1) {
+        elements.cleanupError.textContent = 'Geçerli bir saat aralığı seçin.';
+        elements.cleanupError.hidden = false;
+        return;
+    }
+
+    let total = 0;
+    let round = 0;
+    let completed = false;
+    elements.cleanupError.hidden = true;
+    elements.cleanupProgress.hidden = false;
+    elements.cleanupProgress.textContent = 'Exchange klasörleri taranıyor…';
+    setCleanupBusy(true);
+    setProcessing(true);
+
+    try {
+        while (round < 100) {
+            const data = await api('mailbox-cleanup', {
+                method: 'POST',
+                body: { hours, confirmCleanup: true },
+            });
+            total += Number(data.count) || 0;
+            round += 1;
+            elements.cleanupProgress.textContent = data.hasMore
+                ? `${total} mail Çöp Kutusu’na taşındı; kalanlar taranıyor…`
+                : `${total} mail Çöp Kutusu’na taşındı.`;
+            if (!data.hasMore) {
+                completed = true;
+                break;
+            }
+        }
+
+        if (!completed) {
+            throw new Error('Tek seferde güvenli işlem sınırına ulaşıldı. Kalan mailler için işlemi yeniden başlatın.');
+        }
+        closeCleanup(true);
+        showToast(total > 0 ? `${total} eski mail Çöp Kutusu’na taşındı.` : 'Seçilen süreden eski mail bulunamadı.');
+    } catch (error) {
+        if (error.status === 401) {
+            showLogin('Oturumunuz sona erdi. Yeniden giriş yapın.');
+            return;
+        }
+        elements.cleanupError.textContent = error.message || 'Posta kutusu temizlenemedi.';
+        elements.cleanupError.hidden = false;
+    } finally {
+        setProcessing(false);
+        setCleanupBusy(false);
+    }
+
+    if (completed && state.activeFolder) await loadMessages();
+}
+
+async function emptyTrash() {
+    if (state.activeFolder?.role !== 'trash' || state.processing || state.cleanupBusy) return;
+    const confirmed = window.confirm('Çöp Kutusu’ndaki TÜM mailler kalıcı olarak silinsin mi? Ekrandaki 200 maille sınırlı değildir ve işlem geri alınamaz.');
+    if (!confirmed) return;
+
+    let emptied = false;
+    setProcessing(true);
+    try {
+        await api('empty-trash', {
+            method: 'POST',
+            body: { confirmPermanent: true },
+        });
+        emptied = true;
+        state.messages = [];
+        clearSelection();
+        renderMessages();
+        showToast('Çöp Kutusu tamamen ve kalıcı olarak boşaltıldı.');
+    } catch (error) {
+        handleOperationError(error);
+    } finally {
+        setProcessing(false);
+    }
+
+    if (emptied && state.activeFolder) await loadMessages();
 }
 
 function openSettings() {
@@ -1068,6 +1212,16 @@ elements.searchInput.addEventListener('input', renderMessages);
 elements.refreshButton.addEventListener('click', () => {
     if (!state.loading && !state.processing) loadMessages();
 });
+elements.mailboxCleanupButton.addEventListener('click', openCleanup);
+elements.emptyTrashButton.addEventListener('click', emptyTrash);
+elements.cleanupBackdrop.addEventListener('click', closeCleanup);
+elements.cleanupClose.addEventListener('click', closeCleanup);
+elements.cleanupCancel.addEventListener('click', closeCleanup);
+elements.cleanupHours.addEventListener('change', updateCleanupCutoff);
+elements.cleanupForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    cleanMailbox();
+});
 elements.selectAll.addEventListener('change', () => {
     for (const message of filteredMessages()) {
         if (elements.selectAll.checked) state.selected.add(message.id);
@@ -1176,7 +1330,8 @@ document.addEventListener('keydown', (event) => {
         elements.searchInput.focus();
     }
     if (event.key === 'Escape') {
-        if (!elements.ruleEditorOverlay.hidden) closeRuleEditor();
+        if (!elements.cleanupOverlay.hidden) closeCleanup();
+        else if (!elements.ruleEditorOverlay.hidden) closeRuleEditor();
         else if (!elements.settingsOverlay.hidden) closeSettings();
         else if (!elements.readerOverlay.hidden) closeReader();
         else closeMobileMenu();

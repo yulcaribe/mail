@@ -472,6 +472,17 @@ noscript {
     gap: 13px;
 }
 
+.heading-copy {
+    min-width: 0;
+}
+
+.header-actions {
+    display: flex;
+    margin-left: 4px;
+    align-items: center;
+    gap: 7px;
+}
+
 .eyebrow {
     margin: 0 0 4px;
     color: var(--accent);
@@ -516,6 +527,52 @@ noscript {
 
 .refresh-button.spinning {
     animation: spin .85s linear infinite;
+}
+
+.mailbox-cleanup-button,
+.empty-trash-button {
+    display: inline-flex;
+    min-height: 39px;
+    padding: 0 12px;
+    align-items: center;
+    gap: 7px;
+    color: #53616c;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 10px;
+    transition: color .15s, border-color .15s, background .15s;
+}
+
+.mailbox-cleanup-button b,
+.empty-trash-button b {
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.mailbox-cleanup-button:hover {
+    color: var(--accent-dark);
+    background: var(--accent-wash);
+    border-color: #f1c0aa;
+}
+
+.empty-trash-button {
+    color: #a93434;
+    background: #fff8f8;
+    border-color: #efd3d3;
+}
+
+.empty-trash-button:hover {
+    color: #fff;
+    background: var(--danger);
+    border-color: var(--danger);
+}
+
+.mailbox-cleanup-button:disabled,
+.empty-trash-button:disabled {
+    opacity: .5;
+    cursor: wait;
 }
 
 .search-box {
@@ -1118,12 +1175,14 @@ noscript {
     white-space: pre-wrap;
 }
 
-.settings-open {
+.settings-open,
+.cleanup-open {
     overflow: hidden;
 }
 
 .settings-overlay,
-.rule-editor-overlay {
+.rule-editor-overlay,
+.cleanup-overlay {
     position: fixed;
     z-index: 50;
     inset: 0;
@@ -1133,7 +1192,8 @@ noscript {
 }
 
 .settings-backdrop,
-.rule-editor-backdrop {
+.rule-editor-backdrop,
+.cleanup-backdrop {
     position: absolute;
     inset: 0;
     background: rgba(8, 22, 31, .56);
@@ -1700,6 +1760,193 @@ noscript {
     cursor: wait;
 }
 
+.cleanup-overlay {
+    z-index: 65;
+}
+
+.cleanup-dialog {
+    position: relative;
+    z-index: 1;
+    width: min(100%, 540px);
+    max-height: calc(100vh - 40px);
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 30px 100px rgba(7, 20, 29, .34);
+    overflow-y: auto;
+    animation: settings-in .2s ease-out both;
+}
+
+.cleanup-dialog > header {
+    display: flex;
+    min-height: 78px;
+    padding: 17px 22px;
+    align-items: center;
+    justify-content: space-between;
+    color: #fff;
+    background: var(--navy);
+}
+
+.cleanup-dialog > header p {
+    margin: 0 0 5px;
+    color: #8299a5;
+    font-size: 9px;
+    font-weight: 850;
+    letter-spacing: 2px;
+}
+
+.cleanup-dialog > header h2 {
+    margin: 0;
+    font-size: 19px;
+}
+
+.cleanup-dialog > header > button {
+    display: grid;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    place-items: center;
+    color: #b9c7ce;
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 22px;
+}
+
+.cleanup-dialog > header > button:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, .12);
+}
+
+.cleanup-dialog form {
+    padding: 25px 27px 27px;
+}
+
+.cleanup-icon {
+    display: grid;
+    width: 54px;
+    height: 54px;
+    margin-bottom: 16px;
+    place-items: center;
+    color: var(--accent);
+    background: var(--accent-wash);
+    border-radius: 15px;
+    font-size: 25px;
+}
+
+.cleanup-intro {
+    margin: 0 0 22px;
+    color: #56646e;
+    font-size: 12px;
+    line-height: 1.65;
+}
+
+.cleanup-dialog form > label {
+    display: block;
+    margin-bottom: 8px;
+    color: #3d4b56;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.cleanup-dialog select {
+    width: 100%;
+    height: 44px;
+    padding: 0 12px;
+    color: var(--ink);
+    background: #fafbfb;
+    border: 1px solid #dce3e6;
+    border-radius: 9px;
+}
+
+.cleanup-dialog select:focus {
+    background: #fff;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(239, 111, 59, .08);
+    outline: 0;
+}
+
+.cleanup-summary {
+    display: grid;
+    margin-top: 18px;
+    padding: 13px 14px;
+    align-items: start;
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 9px;
+    color: #66747e;
+    background: #f6f8f9;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+}
+
+.cleanup-summary > span {
+    display: grid;
+    width: 20px;
+    height: 20px;
+    place-items: center;
+    color: #fff;
+    background: #81939e;
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: 850;
+}
+
+.cleanup-summary p,
+.cleanup-progress {
+    margin: 0;
+    font-size: 10px;
+    line-height: 1.55;
+}
+
+.cleanup-summary strong {
+    color: #35444f;
+}
+
+.cleanup-progress {
+    margin-top: 14px;
+    padding: 11px 13px;
+    color: var(--accent-dark);
+    background: var(--accent-wash);
+    border-radius: 9px;
+    font-weight: 750;
+}
+
+.cleanup-actions {
+    display: flex;
+    margin-top: 22px;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.cleanup-actions button {
+    min-height: 41px;
+    padding: 0 15px;
+    color: #62707b;
+    background: #fff;
+    border: 1px solid #dce3e6;
+    border-radius: 9px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.cleanup-actions .cleanup-submit {
+    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.cleanup-actions .cleanup-submit:hover {
+    background: var(--accent-dark);
+}
+
+.cleanup-actions button:disabled,
+.cleanup-dialog > header > button:disabled,
+.cleanup-dialog select:disabled {
+    opacity: .5;
+    cursor: wait;
+}
+
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
@@ -1813,13 +2060,25 @@ noscript {
         width: 100%;
     }
 
-    .heading-row > div {
+    .heading-row > .heading-copy {
         min-width: 0;
         flex: 1;
     }
 
-    .refresh-button {
+    .header-actions {
         margin-left: auto;
+    }
+
+    .mailbox-cleanup-button,
+    .empty-trash-button {
+        width: 39px;
+        padding: 0;
+        justify-content: center;
+    }
+
+    .mailbox-cleanup-button b,
+    .empty-trash-button b {
+        display: none;
     }
 
     .search-box {
@@ -1923,12 +2182,14 @@ noscript {
     }
 
     .settings-overlay,
-    .rule-editor-overlay {
+    .rule-editor-overlay,
+    .cleanup-overlay {
         padding: 0;
     }
 
     .settings-panel,
-    .rule-editor {
+    .rule-editor,
+    .cleanup-dialog {
         width: 100%;
         height: 100%;
         max-height: none;
@@ -1969,5 +2230,18 @@ noscript {
 
     .rule-editor form {
         padding: 19px 17px 28px;
+    }
+
+    .cleanup-dialog form {
+        padding: 22px 17px 28px;
+    }
+
+    .cleanup-actions {
+        align-items: stretch;
+        flex-direction: column-reverse;
+    }
+
+    .cleanup-actions button {
+        width: 100%;
     }
 }

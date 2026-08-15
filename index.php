@@ -14,8 +14,8 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <title>Beyan Mail</title>
-    <link rel="stylesheet" href="assets/style.css?v=6">
-    <script src="assets/app.js?v=6" defer></script>
+    <link rel="stylesheet" href="assets/style.css?v=7">
+    <script src="assets/app.js?v=7" defer></script>
 </head>
 <body>
     <noscript>Bu posta arayüzünü kullanmak için JavaScript etkin olmalıdır.</noscript>
@@ -88,11 +88,21 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
             <header class="mail-header">
                 <div class="heading-row">
                     <button class="menu-button" id="menuButton" type="button" aria-label="Klasörleri aç">☰</button>
-                    <div>
+                    <div class="heading-copy">
                         <p class="eyebrow">Posta kutusu</p>
                         <h1 id="folderTitle">Gelen Kutusu</h1>
                     </div>
-                    <button class="refresh-button" id="refreshButton" type="button" aria-label="Yenile">↻</button>
+                    <div class="header-actions">
+                        <button class="empty-trash-button" id="emptyTrashButton" type="button" aria-label="Çöp Kutusunu tamamen boşalt" hidden>
+                            <span aria-hidden="true">⌫</span>
+                            <b>Çöp Kutusunu boşalt</b>
+                        </button>
+                        <button class="mailbox-cleanup-button" id="mailboxCleanupButton" type="button" aria-label="Mail kutusunu boşalt">
+                            <span aria-hidden="true">◷</span>
+                            <b>Mail kutusunu boşalt</b>
+                        </button>
+                        <button class="refresh-button" id="refreshButton" type="button" aria-label="Yenile">↻</button>
+                    </div>
                 </div>
                 <div class="search-box">
                     <span aria-hidden="true">⌕</span>
@@ -218,6 +228,49 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
                         <div class="rules-list" id="rulesList"></div>
                     </section>
                 </div>
+            </section>
+        </div>
+
+        <div class="cleanup-overlay" id="cleanupOverlay" hidden>
+            <div class="cleanup-backdrop" id="cleanupBackdrop"></div>
+            <section class="cleanup-dialog" role="dialog" aria-modal="true" aria-labelledby="cleanupTitle">
+                <header>
+                    <div>
+                        <p>POSTA KUTUSU TEMİZLİĞİ</p>
+                        <h2 id="cleanupTitle">Eski mailleri temizle</h2>
+                    </div>
+                    <button id="cleanupClose" type="button" aria-label="Temizlik penceresini kapat">×</button>
+                </header>
+
+                <form id="cleanupForm">
+                    <div class="cleanup-icon" aria-hidden="true">◷</div>
+                    <p class="cleanup-intro">Seçtiğiniz süreden daha eski alınmış mailler, Gelen Kutusu ve bütün normal alt klasörlerden Çöp Kutusu’na taşınır.</p>
+
+                    <label for="cleanupHours">Son kaç saat korunsun?</label>
+                    <select id="cleanupHours">
+                        <option value="1">Son 1 saat</option>
+                        <option value="2">Son 2 saat</option>
+                        <option value="4">Son 4 saat</option>
+                        <option value="6">Son 6 saat</option>
+                        <option value="12">Son 12 saat</option>
+                        <option value="24">Son 24 saat</option>
+                        <option value="48">Son 2 gün</option>
+                        <option value="72">Son 3 gün</option>
+                        <option value="168">Son 7 gün</option>
+                    </select>
+
+                    <div class="cleanup-summary">
+                        <span aria-hidden="true">i</span>
+                        <p><strong id="cleanupCutoffText"></strong> tarihinden önce gelen mailler taşınacak. Gönderilenler, Taslaklar, Giden Kutusu ve mevcut Çöp Kutusu etkilenmez.</p>
+                    </div>
+
+                    <p class="cleanup-progress" id="cleanupProgress" role="status" hidden></p>
+                    <p class="form-error" id="cleanupError" role="alert" hidden></p>
+                    <div class="cleanup-actions">
+                        <button id="cleanupCancel" type="button">Vazgeç</button>
+                        <button class="cleanup-submit" id="cleanupSubmit" type="submit">Eski mailleri Çöp Kutusu’na taşı</button>
+                    </div>
+                </form>
             </section>
         </div>
 

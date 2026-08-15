@@ -217,6 +217,52 @@ try {
         exit;
     }
 
+    if ($action === 'mailbox-cleanup') {
+        requireMethod('POST');
+        requireCsrf();
+        $body = jsonBody();
+        if (($body['confirmCleanup'] ?? false) !== true) {
+            respond(['ok' => false, 'message' => 'Posta kutusu temizliği onaylanmadı.'], 400);
+        }
+        $hours = filter_var($body['hours'] ?? null, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1, 'max_range' => 8760],
+        ]);
+        if ($hours === false) {
+            respond(['ok' => false, 'message' => 'Temizlik süresi 1 ile 8760 saat arasında olmalıdır.'], 400);
+        }
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(120);
+        }
+        $cutoff = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
+            ->sub(new DateInterval('PT' . $hours . 'H'));
+        $ews = new EwsClient($config, $auth['username'], $auth['password']);
+        $result = $ews->moveReceivedMessagesBefore($cutoff, 500);
+        respond([
+            'ok' => true,
+            'count' => $result['count'],
+            'hasMore' => $result['more'],
+            'folderCount' => $result['folderCount'],
+            'cutoff' => $cutoff->format(DateTimeInterface::ATOM),
+        ]);
+    }
+
+    if ($action === 'empty-trash') {
+        requireMethod('POST');
+        requireCsrf();
+        $body = jsonBody();
+        if (($body['confirmPermanent'] ?? false) !== true) {
+            respond(['ok' => false, 'message' => 'Kalıcı silme işlemi onaylanmadı.'], 400);
+        }
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(120);
+        }
+        $ews = new EwsClient($config, $auth['username'], $auth['password']);
+        $ews->emptyDeletedItems();
+        $_SESSION['sync_keys'] = [];
+        respond(['ok' => true]);
+    }
+
     if ($action === 'rules') {
         requireMethod('GET');
         $ews = new EwsClient($config, $auth['username'], $auth['password']);
