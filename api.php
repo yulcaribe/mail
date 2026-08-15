@@ -21,6 +21,7 @@ if (!isset($_SESSION['csrf_token']) || !is_string($_SESSION['csrf_token'])) {
 }
 
 require_once __DIR__ . '/lib/EasClient.php';
+require_once __DIR__ . '/lib/EwsClient.php';
 $config = require __DIR__ . '/config.php';
 
 /** @param array<string, mixed> $data */
@@ -214,6 +215,99 @@ try {
         header("Content-Disposition: attachment; filename=\"attachment\"; filename*=UTF-8''" . rawurlencode($safeName));
         echo $bytes;
         exit;
+    }
+
+    if ($action === 'rules') {
+        requireMethod('GET');
+        $ews = new EwsClient($config, $auth['username'], $auth['password']);
+        $ruleFolders = $ews->listMailFolders();
+        $result = $ews->listInboxRules($ruleFolders);
+
+        $rulesById = [];
+        foreach ($result['rules'] as $rule) {
+            $rulesById[(string) $rule['id']] = $rule;
+        }
+        $foldersById = [];
+        $publicFolders = [];
+        foreach ($ruleFolders as $folder) {
+            $foldersById[$folder['id']] = $folder;
+            $publicFolders[] = [
+                'id' => $folder['id'],
+                'name' => $folder['name'],
+                'path' => $folder['path'],
+            ];
+        }
+
+        $_SESSION['ews_rule_cache'] = [
+            'rules' => $rulesById,
+            'raw' => $result['raw'],
+            'folders' => $foldersById,
+            'outlookRuleBlobExists' => $result['outlookRuleBlobExists'],
+        ];
+
+        respond([
+            'ok' => true,
+            'rules' => $result['rules'],
+            'folders' => $publicFolders,
+            'outlookRuleBlobExists' => $result['outlookRuleBlobExists'],
+        ]);
+    }
+
+    if (in_array($action, ['rule-create', 'rule-update', 'rule-toggle', 'rule-delete'], true)) {
+        requireMethod('POST');
+        requireCsrf();
+        $body = jsonBody();
+        $cache = $_SESSION['ews_rule_cache'] ?? null;
+        if (!is_array($cache) || !isset($cache['rules'], $cache['raw'], $cache['folders'])) {
+            respond(['ok' => false, 'message' => 'Kural listesi güncel değil. Ayarları yenileyip tekrar deneyin.'], 409);
+        }
+
+        $blobExists = (bool) ($cache['outlookRuleBlobExists'] ?? false);
+        $confirmed = ($body['confirmOutlookRuleBlobRemoval'] ?? false) === true;
+        if ($blobExists && !$confirmed) {
+            respond([
+                'ok' => false,
+                'message' => 'Outlook kural verisi kaldırılmadan değişiklik yapılamaz. Uyarıyı onaylayın.',
+                'requiresRuleBlobConfirmation' => true,
+            ], 409);
+        }
+
+        $ews = new EwsClient($config, $auth['username'], $auth['password']);
+        $ruleId = trim((string) ($body['ruleId'] ?? ''));
+        $removeBlob = $blobExists && $confirmed;
+
+        if ($action === 'rule-create') {
+            $priorities = array_map(static fn(array $rule): int => (int) ($rule['priority'] ?? 0), array_values($cache['rules']));
+            $priority = ($priorities !== [] ? max($priorities) : 0) + 1;
+            $data = is_array($body['rule'] ?? null) ? $body['rule'] : [];
+            $moveFolderId = trim((string) ($data['moveFolderId'] ?? ''));
+            $moveFolder = $moveFolderId !== '' ? ($cache['folders'][$moveFolderId] ?? null) : null;
+            $ews->createSimpleRule($data, $priority, is_array($moveFolder) ? $moveFolder : null, $removeBlob);
+        } elseif ($action === 'rule-update') {
+            $existing = $cache['rules'][$ruleId] ?? null;
+            if (!is_array($existing) || !($existing['editable'] ?? false)) {
+                respond(['ok' => false, 'message' => 'Bu karmaşık kural güvenli biçimde düzenlenemiyor.'], 400);
+            }
+            $data = is_array($body['rule'] ?? null) ? $body['rule'] : [];
+            $moveFolderId = trim((string) ($data['moveFolderId'] ?? ''));
+            $moveFolder = $moveFolderId !== '' ? ($cache['folders'][$moveFolderId] ?? null) : null;
+            $ews->updateSimpleRule($ruleId, $data, (int) $existing['priority'], is_array($moveFolder) ? $moveFolder : null, $removeBlob);
+        } elseif ($action === 'rule-toggle') {
+            $existing = $cache['rules'][$ruleId] ?? null;
+            $raw = (string) ($cache['raw'][$ruleId] ?? '');
+            if (!is_array($existing) || ($existing['notSupported'] ?? false) || $raw === '') {
+                respond(['ok' => false, 'message' => 'Bu kural Exchange tarafından değiştirilebilir olarak sunulmadı.'], 400);
+            }
+            $ews->toggleRule($raw, (bool) ($body['enabled'] ?? false), $removeBlob);
+        } else {
+            if (!isset($cache['rules'][$ruleId])) {
+                respond(['ok' => false, 'message' => 'Kural bulunamadı.'], 404);
+            }
+            $ews->deleteRule($ruleId, $removeBlob);
+        }
+
+        unset($_SESSION['ews_rule_cache']);
+        respond(['ok' => true]);
     }
 
     if (in_array($action, ['delete', 'mark', 'move'], true)) {

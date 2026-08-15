@@ -8,6 +8,12 @@ const state = {
     messages: [],
     selected: new Set(),
     readerMessageId: '',
+    rules: [],
+    ruleFolders: [],
+    rulesLoaded: false,
+    rulesLoading: false,
+    rulesBusy: false,
+    outlookRuleBlobExists: false,
     loading: false,
     processing: false,
 };
@@ -65,6 +71,36 @@ const elements = {
     readerBody: document.querySelector('#readerBody'),
     recipientToggle: document.querySelector('#recipientToggle'),
     recipientDetails: document.querySelector('#recipientDetails'),
+    settingsButton: document.querySelector('#settingsButton'),
+    settingsOverlay: document.querySelector('#settingsOverlay'),
+    settingsBackdrop: document.querySelector('#settingsBackdrop'),
+    settingsClose: document.querySelector('#settingsClose'),
+    settingsAvatar: document.querySelector('#settingsAvatar'),
+    settingsUsername: document.querySelector('#settingsUsername'),
+    rulesWarning: document.querySelector('#rulesWarning'),
+    rulesStatus: document.querySelector('#rulesStatus'),
+    rulesList: document.querySelector('#rulesList'),
+    addRuleButton: document.querySelector('#addRuleButton'),
+    ruleEditorOverlay: document.querySelector('#ruleEditorOverlay'),
+    ruleEditorBackdrop: document.querySelector('#ruleEditorBackdrop'),
+    ruleEditorClose: document.querySelector('#ruleEditorClose'),
+    ruleEditorTitle: document.querySelector('#ruleEditorTitle'),
+    ruleForm: document.querySelector('#ruleForm'),
+    ruleId: document.querySelector('#ruleId'),
+    ruleName: document.querySelector('#ruleName'),
+    ruleFrom: document.querySelector('#ruleFrom'),
+    ruleSubject: document.querySelector('#ruleSubject'),
+    ruleHasAttachments: document.querySelector('#ruleHasAttachments'),
+    ruleAction: document.querySelector('#ruleAction'),
+    ruleMoveRow: document.querySelector('#ruleMoveRow'),
+    ruleMoveFolder: document.querySelector('#ruleMoveFolder'),
+    ruleMarkReadRow: document.querySelector('#ruleMarkReadRow'),
+    ruleMarkAsRead: document.querySelector('#ruleMarkAsRead'),
+    ruleStopProcessing: document.querySelector('#ruleStopProcessing'),
+    ruleEnabled: document.querySelector('#ruleEnabled'),
+    ruleFormError: document.querySelector('#ruleFormError'),
+    ruleCancelButton: document.querySelector('#ruleCancelButton'),
+    ruleSaveButton: document.querySelector('#ruleSaveButton'),
 };
 
 const roleIcons = {
@@ -105,6 +141,7 @@ async function api(action, options = {}) {
     if (!response.ok || !data.ok) {
         const error = new Error(data.message || 'İşlem tamamlanamadı.');
         error.status = response.status;
+        error.data = data;
         throw error;
     }
     return data;
@@ -117,7 +154,13 @@ function showLogin(message = '') {
     state.activeFolder = null;
     state.messages = [];
     state.selected.clear();
+    state.rules = [];
+    state.ruleFolders = [];
+    state.rulesLoaded = false;
+    state.outlookRuleBlobExists = false;
     closeReader();
+    closeRuleEditor();
+    closeSettings();
     elements.mailView.hidden = true;
     elements.loginView.hidden = false;
     elements.loginError.textContent = message;
@@ -130,10 +173,13 @@ function showMail(username, folders, csrf) {
     state.username = username;
     state.csrf = csrf || '';
     state.folders = folders;
+    state.rulesLoaded = false;
     elements.loginView.hidden = true;
     elements.mailView.hidden = false;
     elements.accountName.textContent = username;
     elements.avatar.textContent = (username[0] || 'B').toLocaleUpperCase('tr-TR');
+    elements.settingsUsername.textContent = username;
+    elements.settingsAvatar.textContent = (username[0] || 'B').toLocaleUpperCase('tr-TR');
     renderFolders();
 
     const first = folders.find((folder) => folder.role === 'inbox') || folders[0];
@@ -580,6 +626,266 @@ function handleOperationError(error) {
     showToast(`Hata: ${error.message}`);
 }
 
+function openSettings() {
+    closeReader();
+    closeMobileMenu();
+    elements.settingsUsername.textContent = state.username;
+    elements.settingsAvatar.textContent = (state.username[0] || 'B').toLocaleUpperCase('tr-TR');
+    elements.settingsOverlay.hidden = false;
+    document.body.classList.add('settings-open');
+    requestAnimationFrame(() => elements.settingsClose.focus());
+    if (!state.rulesLoaded && !state.rulesLoading) loadRules();
+}
+
+function closeSettings() {
+    if (!elements.settingsOverlay) return;
+    closeRuleEditor();
+    elements.settingsOverlay.hidden = true;
+    document.body.classList.remove('settings-open');
+}
+
+async function loadRules() {
+    if (state.rulesLoading) return;
+    state.rulesLoading = true;
+    elements.addRuleButton.disabled = true;
+    elements.rulesList.replaceChildren();
+    elements.rulesStatus.hidden = false;
+    elements.rulesStatus.classList.remove('error');
+    elements.rulesStatus.querySelector('p').textContent = 'Exchange kuralları okunuyor…';
+    const statusSpinner = elements.rulesStatus.querySelector('.spinner');
+    if (statusSpinner) statusSpinner.hidden = false;
+
+    try {
+        const data = await api('rules');
+        state.rules = data.rules || [];
+        state.ruleFolders = data.folders || [];
+        state.outlookRuleBlobExists = Boolean(data.outlookRuleBlobExists);
+        state.rulesLoaded = true;
+        elements.rulesWarning.hidden = !state.outlookRuleBlobExists;
+        renderRules();
+        elements.rulesStatus.hidden = true;
+    } catch (error) {
+        state.rulesLoaded = false;
+        if (error.status === 401) {
+            showLogin('Oturumunuz sona erdi veya EWS erişiminiz bulunmuyor.');
+            return;
+        }
+        elements.rulesStatus.hidden = false;
+        elements.rulesStatus.classList.add('error');
+        if (statusSpinner) statusSpinner.hidden = true;
+        elements.rulesStatus.querySelector('p').textContent = error.message;
+    } finally {
+        state.rulesLoading = false;
+        elements.addRuleButton.disabled = !state.rulesLoaded;
+    }
+}
+
+function renderRules() {
+    elements.rulesList.replaceChildren();
+    if (!state.rules.length) {
+        const empty = document.createElement('div');
+        empty.className = 'rules-empty';
+        const icon = document.createElement('span');
+        icon.textContent = '◇';
+        const title = document.createElement('strong');
+        title.textContent = 'Henüz posta kutusu kuralı yok';
+        const copy = document.createElement('p');
+        copy.textContent = 'Yeni bir kural ekleyerek gelen mailleri otomatik yönetebilirsiniz.';
+        empty.append(icon, title, copy);
+        elements.rulesList.append(empty);
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    for (const rule of state.rules) fragment.append(createRuleCard(rule));
+    elements.rulesList.append(fragment);
+}
+
+function createRuleCard(rule) {
+    const card = document.createElement('article');
+    card.className = `rule-card${rule.enabled ? '' : ' disabled'}${rule.inError ? ' rule-error' : ''}`;
+
+    const order = document.createElement('span');
+    order.className = 'rule-priority';
+    order.textContent = String(rule.priority || '—');
+
+    const body = document.createElement('div');
+    body.className = 'rule-card-body';
+    const titleRow = document.createElement('div');
+    titleRow.className = 'rule-title-row';
+    const title = document.createElement('h3');
+    title.textContent = rule.name;
+    titleRow.append(title);
+
+    if (!rule.editable) {
+        const badge = document.createElement('span');
+        badge.className = 'rule-badge';
+        badge.textContent = rule.notSupported ? 'Exchange desteklemiyor' : 'Karmaşık · salt okunur';
+        titleRow.append(badge);
+    }
+    if (rule.inError) {
+        const errorBadge = document.createElement('span');
+        errorBadge.className = 'rule-badge error';
+        errorBadge.textContent = 'Kural hatalı';
+        titleRow.append(errorBadge);
+    }
+
+    const summary = document.createElement('div');
+    summary.className = 'rule-summary';
+    summary.append(ruleSummaryRow('EĞER', rule.conditions || []));
+    summary.append(ruleSummaryRow('YAP', rule.actions || []));
+    if (Array.isArray(rule.exceptions) && rule.exceptions.length) {
+        summary.append(ruleSummaryRow('HARİÇ', rule.exceptions));
+    }
+    body.append(titleRow, summary);
+
+    const controls = document.createElement('div');
+    controls.className = 'rule-controls';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = `rule-switch${rule.enabled ? ' on' : ''}`;
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-checked', String(Boolean(rule.enabled)));
+    toggle.setAttribute('aria-label', `${rule.name} kuralını ${rule.enabled ? 'devre dışı bırak' : 'etkinleştir'}`);
+    toggle.disabled = state.rulesBusy || rule.notSupported;
+    const knob = document.createElement('span');
+    toggle.append(knob);
+    toggle.addEventListener('click', () => toggleInboxRule(rule));
+
+    const menu = document.createElement('div');
+    menu.className = 'rule-card-actions';
+    if (rule.editable) {
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.textContent = 'Düzenle';
+        edit.disabled = state.rulesBusy;
+        edit.addEventListener('click', () => openRuleEditor(rule));
+        menu.append(edit);
+    }
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'remove-rule';
+    remove.textContent = 'Sil';
+    remove.disabled = state.rulesBusy;
+    remove.addEventListener('click', () => deleteInboxRule(rule));
+    menu.append(remove);
+    controls.append(toggle, menu);
+
+    card.append(order, body, controls);
+    return card;
+}
+
+function ruleSummaryRow(label, values) {
+    const row = document.createElement('p');
+    const key = document.createElement('span');
+    key.textContent = label;
+    const value = document.createElement('b');
+    value.textContent = values.join(' · ');
+    row.append(key, value);
+    return row;
+}
+
+function openRuleEditor(rule = null) {
+    if (!state.rulesLoaded || state.rulesBusy) return;
+    elements.ruleForm.reset();
+    elements.ruleId.value = rule?.id || '';
+    elements.ruleEditorTitle.textContent = rule ? 'Kuralı düzenle' : 'Yeni kural';
+    elements.ruleName.value = rule?.form?.name || '';
+    elements.ruleFrom.value = rule?.form?.fromAddress || '';
+    elements.ruleSubject.value = rule?.form?.subjectContains || '';
+    elements.ruleHasAttachments.checked = Boolean(rule?.form?.hasAttachments);
+    elements.ruleAction.value = rule?.form?.action || 'move';
+    elements.ruleMarkAsRead.checked = Boolean(rule?.form?.markAsRead);
+    elements.ruleStopProcessing.checked = rule ? Boolean(rule.form?.stopProcessing) : true;
+    elements.ruleEnabled.checked = rule ? Boolean(rule.form?.enabled) : true;
+    elements.ruleFormError.hidden = true;
+    populateRuleFolderOptions(rule?.form?.moveFolderId || '');
+    updateRuleActionFields();
+    elements.ruleEditorOverlay.hidden = false;
+    requestAnimationFrame(() => elements.ruleName.focus());
+}
+
+function closeRuleEditor() {
+    if (!elements.ruleEditorOverlay) return;
+    elements.ruleEditorOverlay.hidden = true;
+    elements.ruleFormError.hidden = true;
+}
+
+function populateRuleFolderOptions(selectedId = '') {
+    elements.ruleMoveFolder.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Klasör seçin';
+    elements.ruleMoveFolder.append(placeholder);
+    for (const folder of state.ruleFolders) {
+        const option = document.createElement('option');
+        option.value = folder.id;
+        option.textContent = folder.path || folder.name;
+        elements.ruleMoveFolder.append(option);
+    }
+    elements.ruleMoveFolder.value = selectedId;
+}
+
+function updateRuleActionFields() {
+    const action = elements.ruleAction.value;
+    elements.ruleMoveRow.hidden = action !== 'move';
+    elements.ruleMarkReadRow.hidden = action === 'markRead';
+    if (action === 'markRead') elements.ruleMarkAsRead.checked = true;
+}
+
+function confirmRuleBlobChange() {
+    if (!state.outlookRuleBlobExists) return true;
+    return window.confirm(
+        'Exchange bu posta kutusunda Outlook kural verisi bulunduğunu bildiriyor. Devam edilirse bazı kapalı veya yalnızca Outlook’ta çalışan kurallar kalıcı olarak kaybolabilir. Yine de devam edilsin mi?'
+    );
+}
+
+async function runRuleMutation(action, body) {
+    if (state.rulesBusy || !confirmRuleBlobChange()) return false;
+    setRulesBusy(true);
+    try {
+        await api(action, {
+            method: 'POST',
+            body: {
+                ...body,
+                confirmOutlookRuleBlobRemoval: state.outlookRuleBlobExists,
+            },
+        });
+        state.outlookRuleBlobExists = false;
+        state.rulesLoaded = false;
+        await loadRules();
+        return true;
+    } catch (error) {
+        if (error.status === 401) {
+            showLogin('Oturumunuz sona erdi veya EWS erişiminiz bulunmuyor.');
+            return false;
+        }
+        showToast(`Kural hatası: ${error.message}`);
+        return false;
+    } finally {
+        setRulesBusy(false);
+    }
+}
+
+function setRulesBusy(busy) {
+    state.rulesBusy = busy;
+    elements.addRuleButton.disabled = busy || !state.rulesLoaded;
+    elements.ruleSaveButton.disabled = busy;
+    elements.ruleSaveButton.textContent = busy ? 'Kaydediliyor…' : 'Kuralı kaydet';
+    for (const button of elements.rulesList.querySelectorAll('button')) button.disabled = busy;
+}
+
+async function toggleInboxRule(rule) {
+    const success = await runRuleMutation('rule-toggle', { ruleId: rule.id, enabled: !rule.enabled });
+    if (success) showToast(`Kural ${rule.enabled ? 'devre dışı bırakıldı' : 'etkinleştirildi'}.`);
+}
+
+async function deleteInboxRule(rule) {
+    if (!window.confirm(`“${rule.name}” kuralı silinsin mi?`)) return;
+    const success = await runRuleMutation('rule-delete', { ruleId: rule.id });
+    if (success) showToast('Kural silindi.');
+}
+
 function renderLoading() {
     const wrap = document.createElement('div');
     wrap.className = 'loading-state';
@@ -697,6 +1003,56 @@ elements.recipientToggle.addEventListener('click', () => {
     elements.recipientDetails.hidden = expanded;
 });
 
+elements.settingsButton.addEventListener('click', openSettings);
+elements.settingsClose.addEventListener('click', closeSettings);
+elements.settingsBackdrop.addEventListener('click', closeSettings);
+elements.addRuleButton.addEventListener('click', () => openRuleEditor());
+elements.ruleEditorClose.addEventListener('click', closeRuleEditor);
+elements.ruleEditorBackdrop.addEventListener('click', closeRuleEditor);
+elements.ruleCancelButton.addEventListener('click', closeRuleEditor);
+elements.ruleAction.addEventListener('change', updateRuleActionFields);
+elements.ruleForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const fromAddress = elements.ruleFrom.value.trim();
+    const subjectContains = elements.ruleSubject.value.trim();
+    const hasAttachments = elements.ruleHasAttachments.checked;
+    const action = elements.ruleAction.value;
+    const moveFolderId = elements.ruleMoveFolder.value;
+
+    elements.ruleFormError.hidden = true;
+    if (!fromAddress && !subjectContains && !hasAttachments) {
+        elements.ruleFormError.textContent = 'En az bir koşul yazın veya “Mail ek içeriyor” seçeneğini işaretleyin.';
+        elements.ruleFormError.hidden = false;
+        return;
+    }
+    if (action === 'move' && !moveFolderId) {
+        elements.ruleFormError.textContent = 'Mailin taşınacağı klasörü seçin.';
+        elements.ruleFormError.hidden = false;
+        return;
+    }
+
+    const rule = {
+        name: elements.ruleName.value.trim(),
+        fromAddress,
+        subjectContains,
+        hasAttachments,
+        action,
+        moveFolderId,
+        markAsRead: elements.ruleMarkAsRead.checked,
+        stopProcessing: elements.ruleStopProcessing.checked,
+        enabled: elements.ruleEnabled.checked,
+    };
+    const ruleId = elements.ruleId.value;
+    const success = await runRuleMutation(ruleId ? 'rule-update' : 'rule-create', {
+        ruleId,
+        rule,
+    });
+    if (success) {
+        closeRuleEditor();
+        showToast(ruleId ? 'Kural güncellendi.' : 'Yeni kural eklendi.');
+    }
+});
+
 elements.logoutButton.addEventListener('click', async () => {
     try {
         await api('logout', { method: 'POST' });
@@ -718,7 +1074,9 @@ document.addEventListener('keydown', (event) => {
         elements.searchInput.focus();
     }
     if (event.key === 'Escape') {
-        if (!elements.readerOverlay.hidden) closeReader();
+        if (!elements.ruleEditorOverlay.hidden) closeRuleEditor();
+        else if (!elements.settingsOverlay.hidden) closeSettings();
+        else if (!elements.readerOverlay.hidden) closeReader();
         else closeMobileMenu();
     }
 });

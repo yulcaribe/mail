@@ -14,8 +14,8 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <title>Beyan Mail</title>
-    <link rel="stylesheet" href="assets/style.css?v=2">
-    <script src="assets/app.js?v=2" defer></script>
+    <link rel="stylesheet" href="assets/style.css?v=3">
+    <script src="assets/app.js?v=3" defer></script>
 </head>
 <body>
     <noscript>Bu posta arayüzünü kullanmak için JavaScript etkin olmalıdır.</noscript>
@@ -72,6 +72,10 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
                 <div id="folderList"></div>
             </nav>
 
+            <button class="settings-button" id="settingsButton" type="button">
+                <span aria-hidden="true">⚙</span>
+                Hesap ayarları
+            </button>
             <button class="logout-button" id="logoutButton" type="button">
                 <span aria-hidden="true">↪</span>
                 Oturumu kapat
@@ -169,6 +173,119 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
                     <div class="reader-body" id="readerBody"></div>
                 </div>
             </article>
+        </div>
+
+        <div class="settings-overlay" id="settingsOverlay" hidden>
+            <div class="settings-backdrop" id="settingsBackdrop"></div>
+            <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+                <header class="settings-header">
+                    <div>
+                        <p>BEYAN MAIL</p>
+                        <h1 id="settingsTitle">Hesap ayarları</h1>
+                    </div>
+                    <button id="settingsClose" type="button" aria-label="Ayarları kapat">×</button>
+                </header>
+
+                <div class="settings-content">
+                    <section class="settings-account-card">
+                        <span class="settings-account-avatar" id="settingsAvatar">B</span>
+                        <div>
+                            <strong id="settingsUsername">Hesap</strong>
+                            <p>TGS Exchange · ActiveSync 14.1 · EWS</p>
+                        </div>
+                        <span class="connection-badge">Bağlı</span>
+                    </section>
+
+                    <section class="rules-section">
+                        <div class="rules-heading">
+                            <div>
+                                <p class="settings-kicker">POSTA KUTUSU</p>
+                                <h2>Kurallar</h2>
+                                <span>Gelen mailleri koşullara göre otomatik yönetin.</span>
+                            </div>
+                            <button class="add-rule-button" id="addRuleButton" type="button">＋ Yeni kural</button>
+                        </div>
+
+                        <div class="rules-warning" id="rulesWarning" hidden>
+                            <span aria-hidden="true">!</span>
+                            <p><strong>Outlook kural verisi bulundu.</strong> İlk değişiklikte bazı kapalı veya yalnızca Outlook’ta çalışan kurallar kaybolabilir. Yazma işleminden hemen önce ayrıca onay istenecek.</p>
+                        </div>
+
+                        <div class="rules-status" id="rulesStatus">
+                            <span class="spinner"></span>
+                            <p>Kurallar hazırlanıyor…</p>
+                        </div>
+                        <div class="rules-list" id="rulesList"></div>
+                    </section>
+                </div>
+            </section>
+        </div>
+
+        <div class="rule-editor-overlay" id="ruleEditorOverlay" hidden>
+            <div class="rule-editor-backdrop" id="ruleEditorBackdrop"></div>
+            <section class="rule-editor" role="dialog" aria-modal="true" aria-labelledby="ruleEditorTitle">
+                <header>
+                    <div>
+                        <p>POSTA KUTUSU KURALI</p>
+                        <h2 id="ruleEditorTitle">Yeni kural</h2>
+                    </div>
+                    <button id="ruleEditorClose" type="button" aria-label="Kural düzenleyiciyi kapat">×</button>
+                </header>
+
+                <form id="ruleForm">
+                    <input id="ruleId" type="hidden">
+                    <label for="ruleName">Kural adı</label>
+                    <input id="ruleName" type="text" maxlength="128" placeholder="Ör. Raporları arşivle" required>
+
+                    <fieldset>
+                        <legend>Şu koşullardan hepsi eşleşirse</legend>
+                        <label for="ruleFrom">Gönderen adresi</label>
+                        <input id="ruleFrom" type="text" maxlength="320" placeholder="ornek@firma.com">
+
+                        <label for="ruleSubject">Konu şunu içeriyor</label>
+                        <input id="ruleSubject" type="text" maxlength="255" placeholder="Ör. Günlük rapor">
+
+                        <label class="rule-check">
+                            <input id="ruleHasAttachments" type="checkbox">
+                            <span>Mail ek içeriyor</span>
+                        </label>
+                    </fieldset>
+
+                    <fieldset>
+                        <legend>Şunu yap</legend>
+                        <label for="ruleAction">Ana eylem</label>
+                        <select id="ruleAction" required>
+                            <option value="move">Klasöre taşı</option>
+                            <option value="delete">Sil</option>
+                            <option value="markRead">Okundu olarak işaretle</option>
+                        </select>
+
+                        <div id="ruleMoveRow">
+                            <label for="ruleMoveFolder">Hedef klasör</label>
+                            <select id="ruleMoveFolder"></select>
+                        </div>
+
+                        <label class="rule-check" id="ruleMarkReadRow">
+                            <input id="ruleMarkAsRead" type="checkbox">
+                            <span>Ayrıca okundu olarak işaretle</span>
+                        </label>
+                        <label class="rule-check">
+                            <input id="ruleStopProcessing" type="checkbox" checked>
+                            <span>Bu kuraldan sonra diğer kuralları durdur</span>
+                        </label>
+                        <label class="rule-check">
+                            <input id="ruleEnabled" type="checkbox" checked>
+                            <span>Kural etkin</span>
+                        </label>
+                    </fieldset>
+
+                    <p class="form-error" id="ruleFormError" role="alert" hidden></p>
+                    <div class="rule-form-actions">
+                        <button id="ruleCancelButton" type="button">Vazgeç</button>
+                        <button class="rule-save-button" id="ruleSaveButton" type="submit">Kuralı kaydet</button>
+                    </div>
+                </form>
+            </section>
         </div>
     </section>
 
