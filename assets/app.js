@@ -872,7 +872,13 @@ function setRulesBusy(busy) {
     elements.addRuleButton.disabled = busy || !state.rulesLoaded;
     elements.ruleSaveButton.disabled = busy;
     elements.ruleSaveButton.textContent = busy ? 'Kaydediliyor…' : 'Kuralı kaydet';
-    for (const button of elements.rulesList.querySelectorAll('button')) button.disabled = busy;
+    if (busy) {
+        for (const button of elements.rulesList.querySelectorAll('button')) button.disabled = true;
+    } else if (state.rulesLoaded) {
+        // Kartları yeniden kurarak Exchange'in değiştirmeye izin vermediği
+        // kurallardaki düğmelerin yanlışlıkla etkinleşmesini önle.
+        renderRules();
+    }
 }
 
 async function toggleInboxRule(rule) {

@@ -33,7 +33,13 @@ final class EwsClient
     public function listMailFolders(): array
     {
         $body = '<m:FindFolder Traversal="Deep">' .
-            '<m:FolderShape><t:BaseShape>Default</t:BaseShape></m:FolderShape>' .
+            '<m:FolderShape><t:BaseShape>IdOnly</t:BaseShape>' .
+            '<t:AdditionalProperties>' .
+            '<t:FieldURI FieldURI="folder:DisplayName" />' .
+            '<t:FieldURI FieldURI="folder:ParentFolderId" />' .
+            '<t:FieldURI FieldURI="folder:FolderClass" />' .
+            '</t:AdditionalProperties>' .
+            '</m:FolderShape>' .
             '<m:IndexedPageFolderView MaxEntriesReturned="1000" Offset="0" BasePoint="Beginning" />' .
             '<m:ParentFolderIds><t:DistinguishedFolderId Id="msgfolderroot" /></m:ParentFolderIds>' .
             '</m:FindFolder>';
@@ -47,8 +53,11 @@ final class EwsClient
                 if (!$folderNode instanceof DOMElement) {
                     continue;
                 }
+                if ($folderNode->localName !== 'Folder') {
+                    continue;
+                }
                 $folderClass = $this->text($xpath, './t:FolderClass', $folderNode);
-                if ($folderClass !== '' && !str_starts_with(strtoupper($folderClass), 'IPF.NOTE')) {
+                if (!str_starts_with(strtoupper($folderClass), 'IPF.NOTE')) {
                     continue;
                 }
                 $folderIdNode = $xpath->query('./t:FolderId', $folderNode)?->item(0);

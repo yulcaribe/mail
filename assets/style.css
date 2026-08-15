@@ -337,6 +337,7 @@ noscript {
 }
 
 .folder-button,
+.settings-button,
 .logout-button {
     display: flex;
     width: 100%;
@@ -358,6 +359,7 @@ noscript {
 }
 
 .folder-button:hover,
+.settings-button:hover,
 .logout-button:hover {
     color: #fff;
     background: rgba(255, 255, 255, .055);
@@ -387,9 +389,15 @@ noscript {
     white-space: nowrap;
 }
 
-.logout-button {
+.settings-button {
     margin-top: 20px;
+    padding-top: 15px;
     border-top: 1px solid rgba(255, 255, 255, .07);
+    border-radius: 0;
+}
+
+.logout-button {
+    margin-top: 2px;
     border-radius: 0 0 9px 9px;
 }
 
@@ -1065,6 +1073,588 @@ noscript {
     white-space: pre-wrap;
 }
 
+.settings-open {
+    overflow: hidden;
+}
+
+.settings-overlay,
+.rule-editor-overlay {
+    position: fixed;
+    z-index: 50;
+    inset: 0;
+    display: grid;
+    padding: 20px;
+    place-items: center;
+}
+
+.settings-backdrop,
+.rule-editor-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(8, 22, 31, .56);
+    backdrop-filter: blur(4px);
+    animation: fade-in .2s both;
+}
+
+.settings-panel {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    width: min(100%, 980px);
+    height: min(100%, 820px);
+    flex-direction: column;
+    background: #f7f9fa;
+    border: 1px solid rgba(255, 255, 255, .4);
+    border-radius: 20px;
+    box-shadow: 0 30px 100px rgba(7, 20, 29, .3);
+    overflow: hidden;
+    animation: settings-in .22s ease-out both;
+}
+
+.settings-header {
+    display: flex;
+    min-height: 86px;
+    padding: 20px 28px;
+    align-items: center;
+    justify-content: space-between;
+    color: #fff;
+    background: var(--navy);
+}
+
+.settings-header p,
+.rule-editor > header p {
+    margin: 0 0 5px;
+    color: #8299a5;
+    font-size: 9px;
+    font-weight: 850;
+    letter-spacing: 2px;
+}
+
+.settings-header h1 {
+    margin: 0;
+    font-size: 23px;
+    letter-spacing: -.6px;
+}
+
+.settings-header > button,
+.rule-editor > header > button {
+    display: grid;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    place-items: center;
+    color: #b9c7ce;
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 22px;
+}
+
+.settings-header > button:hover,
+.rule-editor > header > button:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, .12);
+}
+
+.settings-content {
+    min-height: 0;
+    padding: 26px 30px 38px;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.settings-account-card {
+    display: flex;
+    padding: 18px 20px;
+    align-items: center;
+    gap: 14px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 7px 22px rgba(20, 35, 47, .045);
+}
+
+.settings-account-avatar {
+    display: grid;
+    width: 43px;
+    height: 43px;
+    flex: 0 0 auto;
+    place-items: center;
+    color: #fff;
+    background: var(--navy-soft);
+    border-radius: 50%;
+    font-size: 14px;
+    font-weight: 850;
+}
+
+.settings-account-card > div {
+    min-width: 0;
+    flex: 1;
+}
+
+.settings-account-card strong {
+    display: block;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-account-card p {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.connection-badge {
+    padding: 5px 9px;
+    color: #237a52;
+    background: #eaf8f1;
+    border-radius: 999px;
+    font-size: 9px;
+    font-weight: 850;
+}
+
+.rules-section {
+    margin-top: 30px;
+}
+
+.rules-heading {
+    display: flex;
+    margin-bottom: 18px;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.settings-kicker {
+    margin: 0 0 5px;
+    color: var(--accent);
+    font-size: 9px;
+    font-weight: 850;
+    letter-spacing: 1.5px;
+}
+
+.rules-heading h2 {
+    margin: 0 0 4px;
+    font-size: 24px;
+    letter-spacing: -.7px;
+}
+
+.rules-heading > div > span {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.add-rule-button {
+    min-height: 39px;
+    padding: 0 15px;
+    color: #fff;
+    background: var(--accent);
+    border: 0;
+    border-radius: 9px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 800;
+    box-shadow: 0 8px 18px rgba(239, 111, 59, .2);
+}
+
+.add-rule-button:hover {
+    background: var(--accent-dark);
+}
+
+.add-rule-button:disabled {
+    opacity: .5;
+    cursor: wait;
+}
+
+.rules-warning {
+    display: grid;
+    margin-bottom: 14px;
+    padding: 13px 15px;
+    align-items: start;
+    grid-template-columns: 25px minmax(0, 1fr);
+    gap: 10px;
+    color: #77511c;
+    background: #fff8df;
+    border: 1px solid #f2dfa0;
+    border-radius: 11px;
+}
+
+.rules-warning > span {
+    display: grid;
+    width: 23px;
+    height: 23px;
+    place-items: center;
+    color: #fff;
+    background: #d99c2b;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.rules-warning p {
+    margin: 1px 0 0;
+    font-size: 10px;
+    line-height: 1.55;
+}
+
+.rules-status,
+.rules-empty {
+    display: grid;
+    min-height: 210px;
+    padding: 35px 20px;
+    place-items: center;
+    align-content: center;
+    color: var(--muted);
+    background: #fff;
+    border: 1px dashed #dce3e6;
+    border-radius: 13px;
+    text-align: center;
+}
+
+.rules-status p,
+.rules-empty p {
+    max-width: 450px;
+    margin: 13px 0 0;
+    font-size: 11px;
+    line-height: 1.55;
+}
+
+.rules-status.error {
+    color: #a83c3c;
+    background: #fff8f8;
+    border-color: #efcaca;
+}
+
+.rules-empty > span {
+    display: grid;
+    width: 46px;
+    height: 46px;
+    margin-bottom: 12px;
+    place-items: center;
+    color: var(--accent);
+    background: var(--accent-wash);
+    border-radius: 13px;
+    font-size: 22px;
+}
+
+.rules-empty strong {
+    font-size: 13px;
+}
+
+.rules-list {
+    display: grid;
+    gap: 10px;
+}
+
+.rule-card {
+    display: grid;
+    min-height: 112px;
+    padding: 17px 18px;
+    align-items: start;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    gap: 13px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    box-shadow: 0 5px 16px rgba(20, 35, 47, .035);
+}
+
+.rule-card.disabled {
+    opacity: .64;
+}
+
+.rule-card.rule-error {
+    border-color: #efcaca;
+}
+
+.rule-priority {
+    display: grid;
+    width: 26px;
+    height: 26px;
+    place-items: center;
+    color: #7d8a94;
+    background: var(--soft);
+    border-radius: 7px;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.rule-card-body {
+    min-width: 0;
+}
+
+.rule-title-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.rule-title-row h3 {
+    max-width: 100%;
+    margin: 1px 0 8px;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rule-badge {
+    margin: -6px 0 2px;
+    padding: 4px 7px;
+    color: #697781;
+    background: #edf1f3;
+    border-radius: 999px;
+    font-size: 8px;
+    font-weight: 800;
+}
+
+.rule-badge.error {
+    color: #a83c3c;
+    background: #fff0f0;
+}
+
+.rule-summary {
+    display: grid;
+    gap: 5px;
+}
+
+.rule-summary p {
+    display: grid;
+    margin: 0;
+    grid-template-columns: 45px minmax(0, 1fr);
+    gap: 8px;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.rule-summary span {
+    color: #9aa4ab;
+    font-size: 8px;
+    font-weight: 850;
+    letter-spacing: .7px;
+}
+
+.rule-summary b {
+    color: #53616c;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.rule-controls {
+    display: flex;
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.rule-switch {
+    position: relative;
+    width: 38px;
+    height: 21px;
+    padding: 0;
+    background: #d7dee2;
+    border: 0;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background .16s;
+}
+
+.rule-switch span {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 15px;
+    height: 15px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, .16);
+    transition: transform .16s;
+}
+
+.rule-switch.on {
+    background: var(--accent);
+}
+
+.rule-switch.on span {
+    transform: translateX(17px);
+}
+
+.rule-switch:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
+
+.rule-card-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.rule-card-actions button {
+    min-height: 28px;
+    padding: 0 9px;
+    color: #687680;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 9px;
+    font-weight: 750;
+}
+
+.rule-card-actions button:hover {
+    color: var(--accent-dark);
+    border-color: #efb59c;
+}
+
+.rule-card-actions .remove-rule:hover {
+    color: #fff;
+    background: #c94444;
+    border-color: #c94444;
+}
+
+.rule-editor-overlay {
+    z-index: 60;
+}
+
+.rule-editor {
+    position: relative;
+    z-index: 1;
+    width: min(100%, 560px);
+    max-height: calc(100vh - 40px);
+    background: #fff;
+    border-radius: 18px;
+    box-shadow: 0 30px 100px rgba(7, 20, 29, .34);
+    overflow-y: auto;
+    animation: settings-in .2s ease-out both;
+}
+
+.rule-editor > header {
+    position: sticky;
+    z-index: 2;
+    top: 0;
+    display: flex;
+    min-height: 76px;
+    padding: 17px 22px;
+    align-items: center;
+    justify-content: space-between;
+    color: #fff;
+    background: var(--navy);
+}
+
+.rule-editor > header h2 {
+    margin: 0;
+    font-size: 19px;
+}
+
+.rule-editor form {
+    padding: 23px 25px 26px;
+}
+
+.rule-editor form > label,
+.rule-editor fieldset > label:not(.rule-check),
+.rule-editor fieldset > div > label {
+    display: block;
+    margin: 13px 0 7px;
+    color: #3d4b56;
+    font-size: 11px;
+    font-weight: 750;
+}
+
+.rule-editor input[type="text"],
+.rule-editor select {
+    width: 100%;
+    height: 43px;
+    padding: 0 12px;
+    color: var(--ink);
+    background: #fafbfb;
+    border: 1px solid #dce3e6;
+    border-radius: 9px;
+}
+
+.rule-editor input[type="text"]:focus,
+.rule-editor select:focus {
+    background: #fff;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(239, 111, 59, .08);
+    outline: 0;
+}
+
+.rule-editor fieldset {
+    margin: 23px 0 0;
+    padding: 14px 16px 17px;
+    background: #fafbfb;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+}
+
+.rule-editor legend {
+    padding: 0 7px;
+    color: var(--accent-dark);
+    background: #fff;
+    font-size: 9px;
+    font-weight: 850;
+    letter-spacing: .7px;
+    text-transform: uppercase;
+}
+
+.rule-check {
+    display: flex;
+    margin-top: 14px;
+    align-items: center;
+    gap: 9px;
+    color: #53616c;
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 650;
+}
+
+.rule-check input {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.rule-form-actions {
+    display: flex;
+    margin-top: 24px;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.rule-form-actions button {
+    min-height: 40px;
+    padding: 0 15px;
+    color: #62707b;
+    background: #fff;
+    border: 1px solid #dce3e6;
+    border-radius: 9px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.rule-form-actions .rule-save-button {
+    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.rule-form-actions .rule-save-button:hover {
+    background: var(--accent-dark);
+}
+
+.rule-form-actions button:disabled {
+    opacity: .5;
+    cursor: wait;
+}
+
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
@@ -1087,6 +1677,11 @@ noscript {
 @keyframes reader-in {
     from { transform: translateX(25px); opacity: .6; }
     to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes settings-in {
+    from { opacity: .65; transform: translateY(10px) scale(.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @media (max-width: 850px) {
@@ -1280,5 +1875,54 @@ noscript {
     .bulk-actions > button,
     .move-control button {
         min-height: 36px;
+    }
+
+    .settings-overlay,
+    .rule-editor-overlay {
+        padding: 0;
+    }
+
+    .settings-panel,
+    .rule-editor {
+        width: 100%;
+        height: 100%;
+        max-height: none;
+        border-radius: 0;
+    }
+
+    .settings-header {
+        min-height: 72px;
+        padding: 14px 17px;
+    }
+
+    .settings-content {
+        padding: 18px 15px 30px;
+    }
+
+    .rules-heading {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 13px;
+    }
+
+    .add-rule-button {
+        width: 100%;
+    }
+
+    .rule-card {
+        padding: 14px 13px;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 10px;
+    }
+
+    .rule-controls {
+        grid-column: 2;
+        align-items: center;
+        flex-direction: row;
+        justify-content: space-between;
+    }
+
+    .rule-editor form {
+        padding: 19px 17px 28px;
     }
 }
