@@ -1175,6 +1175,27 @@ noscript {
     white-space: pre-wrap;
 }
 
+.reader-body.html-message {
+    font-family: Arial, Helvetica, sans-serif;
+    line-height: normal;
+    overflow-wrap: normal;
+    white-space: normal;
+}
+
+.reader-body.html-message img {
+    max-width: 100%;
+    height: auto;
+}
+
+.reader-body.html-message table {
+    max-width: 100%;
+    border-collapse: collapse;
+}
+
+.reader-body.html-message a {
+    color: #0b5cab;
+}
+
 .settings-open,
 .cleanup-open {
     overflow: hidden;
