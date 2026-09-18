@@ -260,12 +260,15 @@ try {
         $requestedType = trim((string) ($_GET['type'] ?? ''));
         $safeName = normaliseAttachmentName($requestedName, $requestedType);
         $bytes = $client->fetchAttachment($attachmentId);
-        $contentType = $requestedType !== '' ? $requestedType : attachmentContentType($safeName);
+        $requestedBaseType = strtolower(trim(explode(';', $requestedType, 2)[0] ?? ''));
+        $contentType = attachmentExtensionFromContentType($requestedBaseType) !== ''
+            ? $requestedBaseType
+            : attachmentContentType($safeName);
         $fallbackName = attachmentAsciiFallback($safeName);
 
         header('Content-Type: ' . $contentType);
         header('Content-Length: ' . strlen($bytes));
-        header('Content-Disposition: attachment; filename="' . $fallbackName . '"; filename*=UTF-8\'\'' . rawurlencode($safeName));
+        header("Content-Disposition: attachment; filename=\"" . $fallbackName . "\"; filename*=UTF-8''" . rawurlencode($safeName));
         echo $bytes;
         exit;
     }
