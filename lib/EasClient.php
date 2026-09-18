@@ -346,6 +346,8 @@ final class EasClient
                     'name' => $name,
                     'size' => (int) ($this->firstText($attachment, 'EstimatedDataSize') ?: $this->firstText($attachment, 'AttSize')),
                     'contentType' => $this->firstText($attachment, 'ContentType'),
+                    'contentId' => trim($this->firstText($attachment, 'ContentId'), '<>'),
+                    'inline' => $this->firstText($attachment, 'IsInline') === '1',
                 ];
             }
         }
