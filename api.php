@@ -133,6 +133,57 @@ function attachmentContentType(string $name): string
     };
 }
 
+function attachmentExtensionFromContentType(string $contentType): string
+{
+    $type = strtolower(trim(explode(';', $contentType, 2)[0] ?? ''));
+    return match ($type) {
+        'application/pdf' => 'pdf',
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/gif' => 'gif',
+        'text/plain' => 'txt',
+        'text/csv' => 'csv',
+        'application/zip' => 'zip',
+        'application/msword' => 'doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+        'application/vnd.ms-excel' => 'xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+        default => '',
+    };
+}
+
+function normaliseAttachmentName(string $name, string $contentType = ''): string
+{
+    $safeName = preg_replace('/[\x00-\x1F\x7F\\\/]+/u', '_', trim($name)) ?: 'ek';
+    $safeName = rtrim($safeName, ". \t\n\r\0\x0B");
+    if ($safeName === '') {
+        $safeName = 'ek';
+    }
+
+    if (pathinfo($safeName, PATHINFO_EXTENSION) === '') {
+        $extension = attachmentExtensionFromContentType($contentType);
+        if ($extension !== '') {
+            $safeName .= '.' . $extension;
+        }
+    }
+
+    return mb_substr($safeName, 0, 180, 'UTF-8');
+}
+
+function attachmentAsciiFallback(string $name): string
+{
+    $fallback = $name;
+    if (function_exists('iconv')) {
+        $converted = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $name);
+        if (is_string($converted) && $converted !== '') {
+            $fallback = $converted;
+        }
+    }
+    $fallback = preg_replace('/[^A-Za-z0-9._()\- ]+/', '_', $fallback) ?: 'attachment';
+    $fallback = str_replace(['"', '\\'], '_', $fallback);
+    return trim($fallback) !== '' ? trim($fallback) : 'attachment';
+}
+
 $action = strtolower(trim((string) ($_GET['action'] ?? 'status')));
 
 try {
@@ -206,13 +257,15 @@ try {
         requireMethod('GET');
         $attachmentId = trim((string) ($_GET['id'] ?? ''));
         $requestedName = trim((string) ($_GET['name'] ?? 'ek'));
-        $safeName = preg_replace('/[\x00-\x1F\x7F\\\/]+/u', '_', $requestedName) ?: 'ek';
-        $safeName = mb_substr($safeName, 0, 180, 'UTF-8');
+        $requestedType = trim((string) ($_GET['type'] ?? ''));
+        $safeName = normaliseAttachmentName($requestedName, $requestedType);
         $bytes = $client->fetchAttachment($attachmentId);
+        $contentType = $requestedType !== '' ? $requestedType : attachmentContentType($safeName);
+        $fallbackName = attachmentAsciiFallback($safeName);
 
-        header('Content-Type: ' . attachmentContentType($safeName));
+        header('Content-Type: ' . $contentType);
         header('Content-Length: ' . strlen($bytes));
-        header("Content-Disposition: attachment; filename=\"attachment\"; filename*=UTF-8''" . rawurlencode($safeName));
+        header('Content-Disposition: attachment; filename="' . $fallbackName . '"; filename*=UTF-8\'\'' . rawurlencode($safeName));
         echo $bytes;
         exit;
     }
