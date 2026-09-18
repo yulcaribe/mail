@@ -14,8 +14,8 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <title>Beyan Mail</title>
-    <link rel="stylesheet" href="assets/style.css?v=8">
-    <script src="assets/app.js?v=9" defer></script>
+    <link rel="stylesheet" href="assets/style.css?v=9">
+    <script src="assets/app.js?v=10" defer></script>
 </head>
 <body>
     <noscript>Bu posta arayüzünü kullanmak için JavaScript etkin olmalıdır.</noscript>
@@ -143,6 +143,22 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
                 </div>
             </section>
         </main>
+
+        <div class="attachment-preview-overlay" id="attachmentPreviewOverlay" hidden>
+            <div class="attachment-preview-backdrop" id="attachmentPreviewBackdrop"></div>
+            <section class="attachment-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="attachmentPreviewTitle">
+                <header class="attachment-preview-header">
+                    <strong id="attachmentPreviewTitle">Ek önizleme</strong>
+                    <div class="attachment-preview-actions">
+                        <button id="attachmentPreviewDownload" type="button">↓ İndir</button>
+                        <button id="attachmentPreviewClose" type="button" aria-label="Önizlemeyi kapat">×</button>
+                    </div>
+                </header>
+                <div class="attachment-preview-content">
+                    <iframe id="attachmentPreviewFrame" title="Ek önizleme"></iframe>
+                </div>
+            </section>
+        </div>
 
         <div class="reader-overlay" id="readerOverlay" hidden>
             <div class="reader-backdrop" id="readerBackdrop"></div>
