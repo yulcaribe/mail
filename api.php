@@ -184,6 +184,79 @@ function attachmentAsciiFallback(string $name): string
     return trim($fallback) !== '' ? trim($fallback) : 'attachment';
 }
 
+
+/** @return array{bytes:string,contentType:string} */
+function fetchRemoteMailImage(string $url, bool $verifyTls): array
+{
+    if (!function_exists('curl_init')) {
+        throw new RuntimeException('Hostingde PHP cURL eklentisi etkin değil.');
+    }
+
+    $parts = parse_url($url);
+    $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+    $host = strtolower((string) ($parts['host'] ?? ''));
+    if ($scheme !== 'https' || $host === '' || isset($parts['user']) || isset($parts['pass'])) {
+        throw new InvalidArgumentException('Geçersiz imza görseli adresi.');
+    }
+
+    if ($host === 'localhost') {
+        throw new InvalidArgumentException('Geçersiz imza görseli adresi.');
+    }
+
+    $resolved = filter_var($host, FILTER_VALIDATE_IP) ? [$host] : (gethostbynamel($host) ?: []);
+    if ($resolved === []) {
+        throw new RuntimeException('İmza görselinin sunucusu çözümlenemedi.');
+    }
+
+    $publicIp = '';
+    foreach ($resolved as $ip) {
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            $publicIp = $ip;
+            break;
+        }
+    }
+    if ($publicIp === '') {
+        throw new InvalidArgumentException('İmza görseli yalnızca herkese açık HTTPS adreslerinden alınabilir.');
+    }
+
+    $curl = curl_init($url);
+    if ($curl === false) {
+        throw new RuntimeException('İmza görseli bağlantısı başlatılamadı.');
+    }
+
+    curl_setopt_array($curl, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 6,
+        CURLOPT_TIMEOUT => 12,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_HTTPHEADER => ['Accept: image/*', 'User-Agent: BeyanPhpMail/2.0'],
+        CURLOPT_SSL_VERIFYPEER => $verifyTls,
+        CURLOPT_SSL_VERIFYHOST => $verifyTls ? 2 : 0,
+        CURLOPT_MAXFILESIZE => 4 * 1024 * 1024,
+        CURLOPT_RESOLVE => [$host . ':443:' . $publicIp],
+    ]);
+
+    $bytes = curl_exec($curl);
+    $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+    $contentType = strtolower(trim((string) curl_getinfo($curl, CURLINFO_CONTENT_TYPE)));
+    $error = curl_error($curl);
+    curl_close($curl);
+
+    if (!is_string($bytes) || $status < 200 || $status >= 300) {
+        throw new RuntimeException('İmza görseli indirilemedi' . ($error !== '' ? ': ' . $error : '.'));
+    }
+    if (strlen($bytes) > 4 * 1024 * 1024) {
+        throw new RuntimeException('İmza görseli çok büyük.');
+    }
+
+    $baseType = strtolower(trim(explode(';', $contentType, 2)[0] ?? ''));
+    if (!in_array($baseType, ['image/png', 'image/jpeg', 'image/gif', 'image/webp'], true)) {
+        throw new RuntimeException('İmza görselinin dosya türü desteklenmiyor.');
+    }
+
+    return ['bytes' => $bytes, 'contentType' => $baseType];
+}
+
 $action = strtolower(trim((string) ($_GET['action'] ?? 'status')));
 
 try {
@@ -258,6 +331,7 @@ try {
         $attachmentId = trim((string) ($_GET['id'] ?? ''));
         $requestedName = trim((string) ($_GET['name'] ?? 'ek'));
         $requestedType = trim((string) ($_GET['type'] ?? ''));
+        $inline = (string) ($_GET['inline'] ?? '') === '1';
         $safeName = normaliseAttachmentName($requestedName, $requestedType);
         $bytes = $client->fetchAttachment($attachmentId);
         $requestedBaseType = strtolower(trim(explode(';', $requestedType, 2)[0] ?? ''));
@@ -265,11 +339,23 @@ try {
             ? $requestedBaseType
             : attachmentContentType($safeName);
         $fallbackName = attachmentAsciiFallback($safeName);
+        $disposition = $inline ? 'inline' : 'attachment';
 
         header('Content-Type: ' . $contentType);
         header('Content-Length: ' . strlen($bytes));
-        header("Content-Disposition: attachment; filename=\"" . $fallbackName . "\"; filename*=UTF-8''" . rawurlencode($safeName));
+        header("Content-Disposition: " . $disposition . "; filename=\"" . $fallbackName . "\"; filename*=UTF-8''" . rawurlencode($safeName));
         echo $bytes;
+        exit;
+    }
+
+    if ($action === 'remote-image') {
+        requireMethod('GET');
+        $url = trim((string) ($_GET['url'] ?? ''));
+        $image = fetchRemoteMailImage($url, (bool) ($config['verify_tls'] ?? true));
+        header('Content-Type: ' . $image['contentType']);
+        header('Content-Length: ' . strlen($image['bytes']));
+        header('Cache-Control: private, max-age=3600');
+        echo $image['bytes'];
         exit;
     }
 
