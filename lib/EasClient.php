@@ -473,8 +473,10 @@ final class EasClient
 
         if ($getChanges) {
             $windowSize = max(10, min(100, (int) ($this->config['window_size'] ?? 100)));
+            // HTML gövde iste: imza, tablo, bağlantı ve görseller mümkün
+            // olduğunca Exchange'deki biçimiyle korunur.
             $bodyPreference = $this->tag(17, 5,
-                $this->tag(17, 6, $this->inlineText('1')) .
+                $this->tag(17, 6, $this->inlineText('2')) .
                 $this->tag(17, 7, $this->inlineText('65536'))
             );
             $collection .=
