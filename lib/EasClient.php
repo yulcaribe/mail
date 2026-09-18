@@ -417,9 +417,11 @@ final class EasClient
             $this->tag(0, 11, $this->inlineText($syncKey)) .
             $this->tag(0, 18, $this->inlineText($folderId));
 
-        if ($deletesAsMoves) {
-            $collection .= $this->tag(0, 30);
-        }
+        $collection .= $this->tag(
+            0,
+            30,
+            $this->inlineText($deletesAsMoves ? '1' : '0')
+        );
         $collection .= $this->tag(0, 22, $commands);
 
         $tree = $this->request('Sync', $this->document(
