@@ -557,15 +557,44 @@ function looksLikeHtml(value) {
     return /<\/?[a-z][\s\S]*>/i.test(String(value || ''));
 }
 
-function safeMailUrl(value, allowDataImage = false) {
+function safeMailUrl(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
-    if (allowDataImage && /^data:image\/(?:png|gif|jpe?g|webp);base64,/i.test(raw)) return raw;
     if (/^(?:https?:|mailto:|tel:)/i.test(raw)) return raw;
     return '';
 }
 
-function sanitizeMailHtml(value) {
+function attachmentUrl(attachment, inline = false) {
+    return `api.php?${new URLSearchParams({
+        action: 'attachment',
+        id: attachment?.id || '',
+        name: attachment?.name || 'ek',
+        type: attachment?.contentType || '',
+        ...(inline ? { inline: '1' } : {}),
+    })}`;
+}
+
+function mailImageUrl(value, attachments = []) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^data:image\/(?:png|gif|jpe?g|webp);base64,/i.test(raw)) return raw;
+
+    if (/^cid:/i.test(raw)) {
+        const contentId = raw.slice(4).replace(/^<|>$/g, '').trim().toLowerCase();
+        const attachment = attachments.find((item) =>
+            String(item?.contentId || '').trim().toLowerCase() === contentId
+        );
+        return attachment ? attachmentUrl(attachment, true) : '';
+    }
+
+    if (/^https:\/\//i.test(raw)) {
+        return `api.php?${new URLSearchParams({ action: 'remote-image', url: raw })}`;
+    }
+
+    return '';
+}
+
+function sanitizeMailHtml(value, attachments = []) {
     const documentFromMail = new DOMParser().parseFromString(String(value || ''), 'text/html');
     const blocked = new Set([
         'SCRIPT', 'NOSCRIPT', 'IFRAME', 'FRAME', 'FRAMESET', 'OBJECT', 'EMBED',
@@ -601,7 +630,7 @@ function sanitizeMailHtml(value) {
             }
 
             if (name === 'src') {
-                const safe = element.tagName === 'IMG' ? safeMailUrl(value, true) : '';
+                const safe = element.tagName === 'IMG' ? mailImageUrl(value, attachments) : '';
                 if (safe) {
                     element.setAttribute('src', safe);
                     element.setAttribute('loading', 'lazy');
@@ -634,7 +663,7 @@ function sanitizeMailHtml(value) {
     return documentFromMail.body.innerHTML.trim();
 }
 
-function renderMailBody(value) {
+function renderMailBody(value, attachments = []) {
     const raw = String(value || '').trim();
     elements.readerBody.replaceChildren();
     elements.readerBody.classList.remove('html-message');
@@ -650,7 +679,7 @@ function renderMailBody(value) {
     }
 
     elements.readerBody.classList.add('html-message');
-    elements.readerBody.innerHTML = sanitizeMailHtml(raw);
+    elements.readerBody.innerHTML = sanitizeMailHtml(raw, attachments);
 }
 
 function openMessage(message) {
@@ -665,7 +694,7 @@ function openMessage(message) {
     elements.readerDate.textContent = formatDate(message.date, true);
     elements.readerDate.dateTime = message.date || '';
     elements.readerAvatar.textContent = (friendlySender(message.from)[0] || '?').toLocaleUpperCase('tr-TR');
-    renderMailBody(message.body || message.preview);
+    renderMailBody(message.body || message.preview, message.attachments || []);
     elements.recipientDetails.hidden = true;
     elements.recipientToggle.setAttribute('aria-expanded', 'false');
     renderReaderAttachments(message.attachments || []);
@@ -690,22 +719,83 @@ function readerMessage() {
     return state.messages.find((message) => message.id === state.readerMessageId) || null;
 }
 
+function attachmentDownloadName(attachment) {
+    const raw = String(attachment?.name || 'ek').trim() || 'ek';
+    if (/\.[A-Za-z0-9]{1,10}$/.test(raw)) return raw;
+
+    const type = String(attachment?.contentType || '').split(';', 1)[0].toLowerCase();
+    const extensions = {
+        'application/pdf': 'pdf',
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/gif': 'gif',
+        'text/plain': 'txt',
+        'text/csv': 'csv',
+        'application/zip': 'zip',
+        'application/msword': 'doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+        'application/vnd.ms-excel': 'xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+    };
+    return extensions[type] ? `${raw}.${extensions[type]}` : raw;
+}
+
+async function downloadAttachment(attachment, chip) {
+    if (!attachment?.id || chip.dataset.downloading === '1') return;
+    chip.dataset.downloading = '1';
+    chip.setAttribute('aria-busy', 'true');
+
+    try {
+        const response = await fetch(attachmentUrl(attachment), {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { Accept: '*/*' },
+        });
+
+        if (!response.ok) {
+            let message = 'Ek indirilemedi.';
+            try {
+                const data = await response.json();
+                if (data?.message) message = data.message;
+            } catch (_) {}
+            throw new Error(message);
+        }
+
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = attachmentDownloadName(attachment);
+        link.style.display = 'none';
+        document.body.append(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (error) {
+        showToast(`Ek hatası: ${error.message || 'İndirme başarısız.'}`);
+    } finally {
+        delete chip.dataset.downloading;
+        chip.removeAttribute('aria-busy');
+    }
+}
+
 function renderReaderAttachments(attachments) {
     elements.readerAttachments.replaceChildren();
-    elements.readerAttachments.hidden = attachments.length === 0;
-    for (const attachment of attachments) {
+    const visibleAttachments = attachments.filter((attachment) => !attachment.inline);
+    elements.readerAttachments.hidden = visibleAttachments.length === 0;
+
+    for (const attachment of visibleAttachments) {
         const chip = document.createElement('a');
         chip.className = 'attachment-chip';
-        chip.href = `api.php?${new URLSearchParams({
-            action: 'attachment',
-            id: attachment.id || '',
-            name: attachment.name || 'ek',
-            type: attachment.contentType || '',
-        })}`;
-        chip.setAttribute('download', attachment.name || 'ek');
+        chip.href = attachmentUrl(attachment);
         chip.title = 'Eki indir';
+        chip.addEventListener('click', (event) => {
+            event.preventDefault();
+            downloadAttachment(attachment, chip);
+        });
+
         const name = document.createElement('strong');
-        name.textContent = `⌇ ${attachment.name || 'Ek'}`;
+        name.textContent = `⌇ ${attachmentDownloadName(attachment)}`;
         const size = document.createElement('small');
         size.textContent = attachment.size ? formatBytes(attachment.size) : '';
         chip.append(name, size);
