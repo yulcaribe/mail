@@ -18,6 +18,7 @@ const state = {
     cleanupBusy: false,
     loading: false,
     processing: false,
+    previewAttachment: null,
 };
 
 const elements = {
@@ -73,6 +74,12 @@ const elements = {
     readerDate: document.querySelector('#readerDate'),
     readerAttachments: document.querySelector('#readerAttachments'),
     readerBody: document.querySelector('#readerBody'),
+    attachmentPreviewOverlay: document.querySelector('#attachmentPreviewOverlay'),
+    attachmentPreviewBackdrop: document.querySelector('#attachmentPreviewBackdrop'),
+    attachmentPreviewTitle: document.querySelector('#attachmentPreviewTitle'),
+    attachmentPreviewFrame: document.querySelector('#attachmentPreviewFrame'),
+    attachmentPreviewDownload: document.querySelector('#attachmentPreviewDownload'),
+    attachmentPreviewClose: document.querySelector('#attachmentPreviewClose'),
     recipientToggle: document.querySelector('#recipientToggle'),
     recipientDetails: document.querySelector('#recipientDetails'),
     settingsButton: document.querySelector('#settingsButton'),
@@ -710,6 +717,7 @@ function openMessage(message) {
 
 function closeReader() {
     if (!elements.readerOverlay) return;
+    closeAttachmentPreview();
     elements.readerOverlay.hidden = true;
     state.readerMessageId = '';
     document.body.classList.remove('reader-open');
@@ -717,6 +725,36 @@ function closeReader() {
 
 function readerMessage() {
     return state.messages.find((message) => message.id === state.readerMessageId) || null;
+}
+
+function attachmentPreviewable(attachment) {
+    const type = String(attachment?.contentType || '').split(';', 1)[0].trim().toLowerCase();
+    if (type === 'application/pdf' || type === 'text/plain' || type === 'text/csv') return true;
+    if (/^image\/(?:png|jpe?g|gif|webp)$/.test(type)) return true;
+
+    const name = attachmentDownloadName(attachment).toLowerCase();
+    return /\.(?:pdf|png|jpe?g|gif|webp|txt|csv|log)$/.test(name);
+}
+
+function openAttachmentPreview(attachment) {
+    if (!attachment?.id || !attachmentPreviewable(attachment)) return;
+    state.previewAttachment = attachment;
+    elements.attachmentPreviewTitle.textContent = attachmentDownloadName(attachment);
+    elements.attachmentPreviewFrame.src = attachmentUrl(attachment, true);
+    elements.attachmentPreviewOverlay.hidden = false;
+    document.body.classList.add('attachment-preview-open');
+    requestAnimationFrame(() => elements.attachmentPreviewClose.focus());
+}
+
+function closeAttachmentPreview() {
+    if (!elements.attachmentPreviewOverlay || elements.attachmentPreviewOverlay.hidden) {
+        state.previewAttachment = null;
+        return;
+    }
+    elements.attachmentPreviewOverlay.hidden = true;
+    elements.attachmentPreviewFrame.removeAttribute('src');
+    state.previewAttachment = null;
+    document.body.classList.remove('attachment-preview-open');
 }
 
 function attachmentDownloadName(attachment) {
@@ -785,20 +823,42 @@ function renderReaderAttachments(attachments) {
     elements.readerAttachments.hidden = visibleAttachments.length === 0;
 
     for (const attachment of visibleAttachments) {
-        const chip = document.createElement('a');
+        const chip = document.createElement('div');
         chip.className = 'attachment-chip';
-        chip.href = attachmentUrl(attachment);
-        chip.title = 'Eki indir';
-        chip.addEventListener('click', (event) => {
-            event.preventDefault();
-            downloadAttachment(attachment, chip);
-        });
+
+        const info = document.createElement('div');
+        info.className = 'attachment-chip-info';
 
         const name = document.createElement('strong');
         name.textContent = `⌇ ${attachmentDownloadName(attachment)}`;
+        name.title = attachmentDownloadName(attachment);
+
         const size = document.createElement('small');
         size.textContent = attachment.size ? formatBytes(attachment.size) : '';
-        chip.append(name, size);
+        info.append(name, size);
+
+        const actions = document.createElement('div');
+        actions.className = 'attachment-chip-actions';
+
+        if (attachmentPreviewable(attachment)) {
+            const openButton = document.createElement('button');
+            openButton.type = 'button';
+            openButton.className = 'attachment-open-button';
+            openButton.textContent = 'Aç';
+            openButton.title = 'İndirmeden aç';
+            openButton.addEventListener('click', () => openAttachmentPreview(attachment));
+            actions.append(openButton);
+        }
+
+        const downloadButton = document.createElement('button');
+        downloadButton.type = 'button';
+        downloadButton.className = 'attachment-download-button';
+        downloadButton.textContent = '↓ İndir';
+        downloadButton.title = 'Eki indir';
+        downloadButton.addEventListener('click', () => downloadAttachment(attachment, downloadButton));
+        actions.append(downloadButton);
+
+        chip.append(info, actions);
         elements.readerAttachments.append(chip);
     }
 }
@@ -1423,6 +1483,13 @@ elements.deleteButton.addEventListener('click', () => deleteMessages([...state.s
 
 elements.readerClose.addEventListener('click', closeReader);
 elements.readerBackdrop.addEventListener('click', closeReader);
+elements.attachmentPreviewClose.addEventListener('click', closeAttachmentPreview);
+elements.attachmentPreviewBackdrop.addEventListener('click', closeAttachmentPreview);
+elements.attachmentPreviewDownload.addEventListener('click', () => {
+    if (state.previewAttachment) {
+        downloadAttachment(state.previewAttachment, elements.attachmentPreviewDownload);
+    }
+});
 elements.readerPrevious.addEventListener('click', () => navigateReader(-1));
 elements.readerNext.addEventListener('click', () => navigateReader(1));
 elements.readerUnread.addEventListener('click', () => {
@@ -1515,7 +1582,8 @@ document.addEventListener('keydown', (event) => {
         elements.searchInput.focus();
     }
     if (event.key === 'Escape') {
-        if (!elements.cleanupOverlay.hidden) closeCleanup();
+        if (!elements.attachmentPreviewOverlay.hidden) closeAttachmentPreview();
+        else if (!elements.cleanupOverlay.hidden) closeCleanup();
         else if (!elements.ruleEditorOverlay.hidden) closeRuleEditor();
         else if (!elements.settingsOverlay.hidden) closeSettings();
         else if (!elements.readerOverlay.hidden) closeReader();
