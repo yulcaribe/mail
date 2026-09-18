@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-header("Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+header("Content-Security-Policy: default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'self' blob: data:; child-src 'self' blob: data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
 header('Referrer-Policy: no-referrer');
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
