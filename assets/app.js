@@ -19,6 +19,7 @@ const state = {
     loading: false,
     processing: false,
     previewAttachment: null,
+    previewObjectUrl: '',
 };
 
 const elements = {
@@ -736,23 +737,76 @@ function attachmentPreviewable(attachment) {
     return /\.(?:pdf|png|jpe?g|gif|webp|txt|csv|log)$/.test(name);
 }
 
-function openAttachmentPreview(attachment) {
+function attachmentPreviewContentType(attachment) {
+    const declared = String(attachment?.contentType || '').split(';', 1)[0].trim().toLowerCase();
+    if (declared && declared !== 'application/octet-stream') return declared;
+
+    const name = attachmentDownloadName(attachment).toLowerCase();
+    if (name.endsWith('.pdf')) return 'application/pdf';
+    if (/\.(?:jpg|jpeg)$/.test(name)) return 'image/jpeg';
+    if (name.endsWith('.png')) return 'image/png';
+    if (name.endsWith('.gif')) return 'image/gif';
+    if (name.endsWith('.webp')) return 'image/webp';
+    if (name.endsWith('.csv')) return 'text/csv;charset=utf-8';
+    if (/\.(?:txt|log)$/.test(name)) return 'text/plain;charset=utf-8';
+    return 'application/octet-stream';
+}
+
+async function openAttachmentPreview(attachment) {
     if (!attachment?.id || !attachmentPreviewable(attachment)) return;
+
+    closeAttachmentPreview();
     state.previewAttachment = attachment;
     elements.attachmentPreviewTitle.textContent = attachmentDownloadName(attachment);
-    elements.attachmentPreviewFrame.src = attachmentUrl(attachment, true);
     elements.attachmentPreviewOverlay.hidden = false;
     document.body.classList.add('attachment-preview-open');
-    requestAnimationFrame(() => elements.attachmentPreviewClose.focus());
+    elements.attachmentPreviewFrame.removeAttribute('src');
+    elements.attachmentPreviewFrame.srcdoc = '<!doctype html><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px;color:#52616c}</style>Ek açılıyor…';
+
+    try {
+        const response = await fetch(attachmentUrl(attachment), {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { Accept: '*/*' },
+        });
+
+        if (!response.ok) {
+            let message = 'Ek açılamadı.';
+            try {
+                const data = await response.json();
+                if (data?.message) message = data.message;
+            } catch (_) {}
+            throw new Error(message);
+        }
+
+        const buffer = await response.arrayBuffer();
+        const type = attachmentPreviewContentType(attachment);
+        const blob = new Blob([buffer], { type });
+
+        if (state.previewObjectUrl) {
+            URL.revokeObjectURL(state.previewObjectUrl);
+        }
+        state.previewObjectUrl = URL.createObjectURL(blob);
+        elements.attachmentPreviewFrame.removeAttribute('srcdoc');
+        elements.attachmentPreviewFrame.src = state.previewObjectUrl;
+        requestAnimationFrame(() => elements.attachmentPreviewClose.focus());
+    } catch (error) {
+        elements.attachmentPreviewFrame.removeAttribute('src');
+        elements.attachmentPreviewFrame.srcdoc =
+            `<!doctype html><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px;color:#9b2c2c}</style>${String(error.message || 'Ek açılamadı.').replace(/[&<>"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[char]))}`;
+    }
 }
 
 function closeAttachmentPreview() {
-    if (!elements.attachmentPreviewOverlay || elements.attachmentPreviewOverlay.hidden) {
-        state.previewAttachment = null;
-        return;
+    if (elements.attachmentPreviewOverlay) {
+        elements.attachmentPreviewOverlay.hidden = true;
     }
-    elements.attachmentPreviewOverlay.hidden = true;
-    elements.attachmentPreviewFrame.removeAttribute('src');
+    elements.attachmentPreviewFrame?.removeAttribute('src');
+    elements.attachmentPreviewFrame?.removeAttribute('srcdoc');
+    if (state.previewObjectUrl) {
+        URL.revokeObjectURL(state.previewObjectUrl);
+        state.previewObjectUrl = '';
+    }
     state.previewAttachment = null;
     document.body.classList.remove('attachment-preview-open');
 }
