@@ -553,14 +553,104 @@ function formatDate(value, full = false) {
     return new Intl.DateTimeFormat('tr-TR', { day: '2-digit', month: '2-digit', year: '2-digit' }).format(date);
 }
 
-function readableBody(value) {
+function looksLikeHtml(value) {
+    return /<\/?[a-z][\s\S]*>/i.test(String(value || ''));
+}
+
+function safeMailUrl(value, allowDataImage = false) {
     const raw = String(value || '').trim();
-    if (!raw) return 'Bu mailin metin içeriği bulunmuyor.';
-    if (/<\/?[a-z][\s\S]*>/i.test(raw)) {
-        const documentFromMail = new DOMParser().parseFromString(raw, 'text/html');
-        return (documentFromMail.body.textContent || '').replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+    if (!raw) return '';
+    if (allowDataImage && /^data:image\/(?:png|gif|jpe?g|webp);base64,/i.test(raw)) return raw;
+    if (/^(?:https?:|mailto:|tel:)/i.test(raw)) return raw;
+    return '';
+}
+
+function sanitizeMailHtml(value) {
+    const documentFromMail = new DOMParser().parseFromString(String(value || ''), 'text/html');
+    const blocked = new Set([
+        'SCRIPT', 'NOSCRIPT', 'IFRAME', 'FRAME', 'FRAMESET', 'OBJECT', 'EMBED',
+        'APPLET', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'OPTION',
+        'META', 'BASE', 'LINK', 'STYLE', 'SVG', 'MATH', 'CANVAS'
+    ]);
+
+    for (const element of [...documentFromMail.body.querySelectorAll('*')]) {
+        if (blocked.has(element.tagName)) {
+            element.remove();
+            continue;
+        }
+
+        for (const attribute of [...element.attributes]) {
+            const name = attribute.name.toLowerCase();
+            const value = attribute.value;
+
+            if (name.startsWith('on') || ['srcdoc', 'formaction', 'background'].includes(name)) {
+                element.removeAttribute(attribute.name);
+                continue;
+            }
+
+            if (name === 'href') {
+                const safe = safeMailUrl(value);
+                if (safe) {
+                    element.setAttribute('href', safe);
+                    element.setAttribute('target', '_blank');
+                    element.setAttribute('rel', 'noopener noreferrer');
+                } else {
+                    element.removeAttribute(attribute.name);
+                }
+                continue;
+            }
+
+            if (name === 'src') {
+                const safe = element.tagName === 'IMG' ? safeMailUrl(value, true) : '';
+                if (safe) {
+                    element.setAttribute('src', safe);
+                    element.setAttribute('loading', 'lazy');
+                    element.setAttribute('referrerpolicy', 'no-referrer');
+                } else {
+                    element.removeAttribute(attribute.name);
+                }
+                continue;
+            }
+
+            if (name === 'style') {
+                const safeStyle = value
+                    .replace(/url\s*\([^)]*\)/gi, '')
+                    .replace(/expression\s*\([^)]*\)/gi, '')
+                    .replace(/behavior\s*:/gi, '');
+                if (safeStyle.trim()) element.setAttribute('style', safeStyle);
+                else element.removeAttribute('style');
+                continue;
+            }
+
+            const allowed = new Set([
+                'style', 'title', 'alt', 'width', 'height', 'align', 'valign',
+                'border', 'cellpadding', 'cellspacing', 'colspan', 'rowspan',
+                'role', 'dir', 'lang'
+            ]);
+            if (!allowed.has(name)) element.removeAttribute(attribute.name);
+        }
     }
-    return raw;
+
+    return documentFromMail.body.innerHTML.trim();
+}
+
+function renderMailBody(value) {
+    const raw = String(value || '').trim();
+    elements.readerBody.replaceChildren();
+    elements.readerBody.classList.remove('html-message');
+
+    if (!raw) {
+        elements.readerBody.textContent = 'Bu mailin metin içeriği bulunmuyor.';
+        return;
+    }
+
+    if (!looksLikeHtml(raw)) {
+        elements.readerBody.textContent = raw;
+        return;
+    }
+
+    elements.readerBody.classList.add('html-message');
+    elements.readerBody.innerHTML = sanitizeMailHtml(raw);
 }
 
 function openMessage(message) {
@@ -575,7 +665,7 @@ function openMessage(message) {
     elements.readerDate.textContent = formatDate(message.date, true);
     elements.readerDate.dateTime = message.date || '';
     elements.readerAvatar.textContent = (friendlySender(message.from)[0] || '?').toLocaleUpperCase('tr-TR');
-    elements.readerBody.textContent = readableBody(message.body || message.preview);
+    renderMailBody(message.body || message.preview);
     elements.recipientDetails.hidden = true;
     elements.recipientToggle.setAttribute('aria-expanded', 'false');
     renderReaderAttachments(message.attachments || []);
@@ -606,7 +696,12 @@ function renderReaderAttachments(attachments) {
     for (const attachment of attachments) {
         const chip = document.createElement('a');
         chip.className = 'attachment-chip';
-        chip.href = `api.php?${new URLSearchParams({ action: 'attachment', id: attachment.id || '', name: attachment.name || 'ek' })}`;
+        chip.href = `api.php?${new URLSearchParams({
+            action: 'attachment',
+            id: attachment.id || '',
+            name: attachment.name || 'ek',
+            type: attachment.contentType || '',
+        })}`;
         chip.setAttribute('download', attachment.name || 'ek');
         chip.title = 'Eki indir';
         const name = document.createElement('strong');
