@@ -15,7 +15,7 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
     <meta name="color-scheme" content="light">
     <title>Beyan Mail</title>
     <link rel="stylesheet" href="assets/style.css?v=8">
-    <script src="assets/app.js?v=8" defer></script>
+    <script src="assets/app.js?v=9" defer></script>
 </head>
 <body>
     <noscript>Bu posta arayüzünü kullanmak için JavaScript etkin olmalıdır.</noscript>
