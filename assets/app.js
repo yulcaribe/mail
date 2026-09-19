@@ -16,6 +16,7 @@ const state = {
     rulesBusy: false,
     outlookRuleBlobExists: false,
     cleanupBusy: false,
+    quotaExceeded: false,
     loading: false,
     processing: false,
     previewAttachment: null,
@@ -182,6 +183,7 @@ function showLogin(message = '') {
     state.rulesLoaded = false;
     state.outlookRuleBlobExists = false;
     state.cleanupBusy = false;
+    state.quotaExceeded = false;
     closeReader();
     closeRuleEditor();
     closeSettings();
@@ -194,10 +196,11 @@ function showLogin(message = '') {
     requestAnimationFrame(() => elements.username.focus());
 }
 
-function showMail(username, folders, csrf) {
+function showMail(username, folders, csrf, quotaExceeded = false) {
     state.username = username;
     state.csrf = csrf || '';
     state.folders = folders;
+    state.quotaExceeded = Boolean(quotaExceeded);
     state.expandedFolderIds = new Set(
         folders
             .map((folder) => folder.parentId)
@@ -216,8 +219,18 @@ function showMail(username, folders, csrf) {
     if (first) {
         selectFolder(first);
     } else {
-        elements.folderTitle.textContent = 'Posta kutusu';
-        renderEmpty('Klasör bulunamadı', 'Exchange hesabınız hiçbir posta klasörü döndürmedi.');
+        elements.folderTitle.textContent = state.quotaExceeded ? 'Kota kurtarma' : 'Posta kutusu';
+        if (state.quotaExceeded) {
+            elements.messageCount.textContent = 'Posta kutusu dolu';
+            elements.pageInfo.textContent = '';
+            renderEmpty(
+                'Posta kutusu kotası dolu',
+                'Exchange klasörleri şu an açılamıyor; ama oturum açık. Üstteki “Mail kutusunu boşalt” veya “Çöp Kutusunu boşalt” düğmeleriyle yer açabilirsiniz.'
+            );
+            updateMailboxActions();
+        } else {
+            renderEmpty('Klasör bulunamadı', 'Exchange hesabınız hiçbir posta klasörü döndürmedi.');
+        }
     }
 }
 
@@ -1041,7 +1054,7 @@ function handleOperationError(error) {
 }
 
 function updateMailboxActions() {
-    elements.emptyTrashButton.hidden = state.activeFolder?.role !== 'trash';
+    elements.emptyTrashButton.hidden = !state.quotaExceeded && state.activeFolder?.role !== 'trash';
 }
 
 function updateCleanupCutoff() {
@@ -1137,11 +1150,17 @@ async function cleanMailbox() {
         setCleanupBusy(false);
     }
 
-    if (completed && state.activeFolder) await loadMessages();
+    if (completed) {
+        if (state.quotaExceeded) {
+            await refreshFoldersAfterRecovery();
+        } else if (state.activeFolder) {
+            await loadMessages();
+        }
+    }
 }
 
 async function emptyTrash() {
-    if (state.activeFolder?.role !== 'trash' || state.processing || state.cleanupBusy) return;
+    if ((!state.quotaExceeded && state.activeFolder?.role !== 'trash') || state.processing || state.cleanupBusy) return;
     const confirmed = window.confirm('Çöp Kutusu’ndaki TÜM mailler kalıcı olarak silinsin mi? Ekrandaki 200 maille sınırlı değildir ve işlem geri alınamaz.');
     if (!confirmed) return;
 
@@ -1163,7 +1182,31 @@ async function emptyTrash() {
         setProcessing(false);
     }
 
-    if (emptied && state.activeFolder) await loadMessages();
+    if (emptied) {
+        if (state.quotaExceeded) {
+            await refreshFoldersAfterRecovery();
+        } else if (state.activeFolder) {
+            await loadMessages();
+        }
+    }
+}
+
+async function refreshFoldersAfterRecovery() {
+    try {
+        const data = await api('folders');
+        if (!data.quotaExceeded && Array.isArray(data.folders) && data.folders.length) {
+            showMail(data.username, data.folders, data.csrf, false);
+            showToast('Posta kutusunda yer açıldı. Klasörler tekrar kullanılabilir.');
+            return true;
+        }
+        state.quotaExceeded = Boolean(data.quotaExceeded);
+        updateMailboxActions();
+    } catch (error) {
+        if (error.status === 401) {
+            showLogin('Oturumunuz sona erdi. Yeniden giriş yapın.');
+        }
+    }
+    return false;
 }
 
 function openSettings() {
@@ -1491,7 +1534,7 @@ elements.loginForm.addEventListener('submit', async (event) => {
             body: { username: elements.username.value, password: elements.password.value },
         });
         elements.password.value = '';
-        showMail(data.username, data.folders || [], data.csrf);
+        showMail(data.username, data.folders || [], data.csrf, data.quotaExceeded);
     } catch (error) {
         elements.loginError.textContent = error.message;
         elements.loginError.hidden = false;
@@ -1649,7 +1692,7 @@ document.addEventListener('keydown', (event) => {
 (async function boot() {
     try {
         const data = await api('folders');
-        showMail(data.username, data.folders || [], data.csrf);
+        showMail(data.username, data.folders || [], data.csrf, data.quotaExceeded);
     } catch (error) {
         showLogin(error?.message || '');
     }
