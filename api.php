@@ -280,7 +280,19 @@ try {
         }
 
         $client = new EasClient($config, $username, $password);
-        $folders = $client->listFolders();
+        $quotaExceeded = false;
+        try {
+            $folders = $client->listFolders();
+        } catch (RuntimeException $exception) {
+            if (!str_contains($exception->getMessage(), 'Exchange 113')) {
+                throw $exception;
+            }
+            // ActiveSync FolderSync kota doluyken 113 döndürebiliyor.
+            // Kullanıcının EWS tabanlı temizlik araçlarına yine de girebilmesi
+            // için oturumu aç ve arayüzü kurtarma modunda başlat.
+            $folders = [];
+            $quotaExceeded = true;
+        }
 
         session_regenerate_id(true);
         $_SESSION['mail_auth'] = [
@@ -293,6 +305,7 @@ try {
             'ok' => true,
             'username' => $username,
             'folders' => $folders,
+            'quotaExceeded' => $quotaExceeded,
             'csrf' => (string) $_SESSION['csrf_token'],
         ]);
     }
@@ -309,10 +322,22 @@ try {
 
     if ($action === 'folders') {
         requireMethod('GET');
+        $quotaExceeded = false;
+        try {
+            $folders = $client->listFolders();
+        } catch (RuntimeException $exception) {
+            if (!str_contains($exception->getMessage(), 'Exchange 113')) {
+                throw $exception;
+            }
+            $folders = [];
+            $quotaExceeded = true;
+        }
+
         respond([
             'ok' => true,
             'username' => $auth['username'],
-            'folders' => $client->listFolders(),
+            'folders' => $folders,
+            'quotaExceeded' => $quotaExceeded,
             'csrf' => (string) $_SESSION['csrf_token'],
         ]);
     }
