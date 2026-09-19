@@ -1553,7 +1553,9 @@ elements.passwordToggle.addEventListener('click', () => {
 
 elements.searchInput.addEventListener('input', renderMessages);
 elements.refreshButton.addEventListener('click', () => {
-    if (!state.loading && !state.processing) loadMessages();
+    if (state.loading || state.processing) return;
+    if (state.quotaExceeded) refreshFoldersAfterRecovery();
+    else loadMessages();
 });
 elements.mailboxCleanupButton.addEventListener('click', openCleanup);
 elements.emptyTrashButton.addEventListener('click', emptyTrash);
