@@ -131,7 +131,7 @@ const roleIcons = {
     drafts: '▤',
     outbox: '⌁',
     trash: '⌫',
-    other: '□',
+    other: '•',
 };
 
 async function api(action, options = {}) {
@@ -270,6 +270,7 @@ function renderFolders() {
 
         const icon = document.createElement('span');
         icon.className = 'folder-icon';
+        if (folder.role === 'other') icon.classList.add('custom-folder-icon');
         icon.textContent = roleIcons[folder.role] || roleIcons.other;
 
         const label = document.createElement('span');
@@ -1649,7 +1650,7 @@ document.addEventListener('keydown', (event) => {
     try {
         const data = await api('folders');
         showMail(data.username, data.folders || [], data.csrf);
-    } catch (_) {
-        showLogin();
+    } catch (error) {
+        showLogin(error?.message || '');
     }
 })();
