@@ -266,7 +266,7 @@ noscript {
     flex-direction: column;
     color: #dce5e9;
     background: var(--navy);
-    overflow-y: auto;
+    overflow: hidden;
 }
 
 .sidebar-brand {
@@ -324,7 +324,11 @@ noscript {
 }
 
 .folder-nav {
-    flex: 1;
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
 }
 
 .folder-branch {
@@ -427,6 +431,10 @@ noscript {
     font-size: 17px;
 }
 
+.folder-icon.custom-folder-icon {
+    font-size: 13px;
+}
+
 .folder-name {
     min-width: 0;
     overflow: hidden;
@@ -437,12 +445,14 @@ noscript {
 .settings-button {
     margin-top: 20px;
     padding-top: 15px;
+    flex: 0 0 auto;
     border-top: 1px solid rgba(255, 255, 255, .07);
     border-radius: 0;
 }
 
 .logout-button {
     margin-top: 2px;
+    flex: 0 0 auto;
     border-radius: 0 0 9px 9px;
 }
 
@@ -2130,6 +2140,9 @@ noscript {
         z-index: 20;
         left: 0;
         width: 265px;
+        height: 100dvh;
+        max-height: 100dvh;
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
         transform: translateX(-102%);
         transition: transform .22s ease;
     }
