@@ -108,6 +108,9 @@ final class EasClient
         $tree = $this->request('FolderSync', $this->folderSyncPayload());
         $status = $this->firstText($tree, 'Status');
         if ($status !== '' && $status !== '1') {
+            if ($status === '113') {
+                throw new RuntimeException('Posta kutusu depolama kotası dolu (Exchange 113). Çok fazla mail olan klasörleri ve Çöp Kutusu’nu temizleyip tekrar deneyin.');
+            }
             throw new RuntimeException("Exchange klasör hatası: {$status}");
         }
 
@@ -170,6 +173,9 @@ final class EasClient
             $collection = $this->findNodes($tree, 'Collection')[0] ?? $tree;
             $status = $this->firstText($collection, 'Status');
             if ($status !== '' && $status !== '1') {
+                if ($status === '113') {
+                    throw new RuntimeException('Posta kutusu depolama kotası dolu (Exchange 113). Çok fazla mail olan klasörleri ve Çöp Kutusu’nu temizleyip tekrar deneyin.');
+                }
                 throw new RuntimeException("Exchange eşitleme hatası: {$status}");
             }
 
