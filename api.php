@@ -70,8 +70,8 @@ function requireCsrf(): void
 function operationIds(array $body): array
 {
     $ids = $body['ids'] ?? null;
-    if (!is_array($ids) || $ids === [] || count($ids) > 200) {
-        respond(['ok' => false, 'message' => 'Bir işlemde 1 ile 200 arasında mail seçebilirsiniz.'], 400);
+    if (!is_array($ids) || $ids === [] || count($ids) > 5000) {
+        respond(['ok' => false, 'message' => 'Bir işlemde 1 ile 5000 arasında mail seçebilirsiniz.'], 400);
     }
 
     $clean = [];
@@ -257,6 +257,65 @@ function fetchRemoteMailImage(string $url, bool $verifyTls): array
     return ['bytes' => $bytes, 'contentType' => $baseType];
 }
 
+/** @param list<array<string,mixed>> $folders
+ *  @return list<array<string,mixed>>
+ */
+function addFolderCounts(array $folders, array $config, string $username, string $password): array
+{
+    if ($folders === []) {
+        return $folders;
+    }
+
+    try {
+        $ews = new EwsClient($config, $username, $password);
+        $ewsFolders = $ews->listMailFolders();
+    } catch (Throwable $exception) {
+        error_log('Beyan Mail folder counts: ' . $exception->getMessage());
+        foreach ($folders as &$folder) {
+            $folder['totalCount'] = null;
+            $folder['unreadCount'] = null;
+        }
+        unset($folder);
+        return $folders;
+    }
+
+    $normalisePath = static function (string $path): string {
+        $path = preg_replace('/\s*\/\s*/u', ' / ', trim($path)) ?: trim($path);
+        return mb_strtolower($path, 'UTF-8');
+    };
+
+    $byPath = [];
+    $byName = [];
+    foreach ($ewsFolders as $folder) {
+        $pathKey = $normalisePath((string) ($folder['path'] ?? $folder['name'] ?? ''));
+        if ($pathKey !== '') {
+            $byPath[$pathKey] = $folder;
+        }
+        $nameKey = mb_strtolower(trim((string) ($folder['name'] ?? '')), 'UTF-8');
+        if ($nameKey !== '') {
+            $byName[$nameKey][] = $folder;
+        }
+    }
+
+    foreach ($folders as &$folder) {
+        $pathKey = $normalisePath((string) ($folder['path'] ?? $folder['name'] ?? ''));
+        $match = $byPath[$pathKey] ?? null;
+        if (!is_array($match)) {
+            $nameKey = mb_strtolower(trim((string) ($folder['name'] ?? '')), 'UTF-8');
+            $candidates = $byName[$nameKey] ?? [];
+            if (count($candidates) === 1) {
+                $match = $candidates[0];
+            }
+        }
+
+        $folder['totalCount'] = is_array($match) ? (int) ($match['totalCount'] ?? 0) : null;
+        $folder['unreadCount'] = is_array($match) ? (int) ($match['unreadCount'] ?? 0) : null;
+    }
+    unset($folder);
+
+    return $folders;
+}
+
 $action = strtolower(trim((string) ($_GET['action'] ?? 'status')));
 
 try {
@@ -283,6 +342,7 @@ try {
         $quotaExceeded = false;
         try {
             $folders = $client->listFolders();
+            $folders = addFolderCounts($folders, $config, $username, $password);
         } catch (RuntimeException $exception) {
             if (!str_contains($exception->getMessage(), 'Exchange 113')) {
                 throw $exception;
@@ -325,6 +385,7 @@ try {
         $quotaExceeded = false;
         try {
             $folders = $client->listFolders();
+            $folders = addFolderCounts($folders, $config, $auth['username'], $auth['password']);
         } catch (RuntimeException $exception) {
             if (!str_contains($exception->getMessage(), 'Exchange 113')) {
                 throw $exception;
@@ -349,6 +410,14 @@ try {
         $_SESSION['sync_keys'][$folderId] = $result['syncKey'];
         unset($result['syncKey']);
         respond(['ok' => true] + $result);
+    }
+
+    if ($action === 'message') {
+        requireMethod('GET');
+        $folderId = trim((string) ($_GET['folderId'] ?? ''));
+        $messageId = trim((string) ($_GET['id'] ?? ''));
+        $message = $client->fetchMessage($folderId, $messageId);
+        respond(['ok' => true, 'message' => $message]);
     }
 
     if ($action === 'attachment') {
@@ -545,7 +614,17 @@ try {
             $permanent = (bool) ($body['permanent'] ?? false);
             $nextSyncKey = $client->deleteMessages($folderId, $syncKey, $ids, !$permanent);
             $_SESSION['sync_keys'][$folderId] = $nextSyncKey;
-            respond(['ok' => true, 'count' => count($ids)]);
+
+            $delta = null;
+            try {
+                $delta = $client->syncChanges($folderId, $nextSyncKey);
+                $_SESSION['sync_keys'][$folderId] = $delta['syncKey'];
+                unset($delta['syncKey']);
+            } catch (Throwable $deltaException) {
+                error_log('Beyan Mail delete delta: ' . $deltaException->getMessage());
+            }
+
+            respond(['ok' => true, 'count' => count($ids), 'delta' => $delta]);
         }
 
         $read = (bool) ($body['read'] ?? false);
