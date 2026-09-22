@@ -138,6 +138,23 @@ final class EasClient
             ];
         }
 
+        $byId = [];
+        foreach ($folders as $folder) {
+            $byId[$folder['id']] = $folder;
+        }
+        foreach ($folders as &$folder) {
+            $parts = [];
+            $current = $folder['id'];
+            $seen = [];
+            while (isset($byId[$current]) && !isset($seen[$current]) && count($parts) < 12) {
+                $seen[$current] = true;
+                array_unshift($parts, $byId[$current]['name']);
+                $current = $byId[$current]['parentId'];
+            }
+            $folder['path'] = implode(' / ', $parts);
+        }
+        unset($folder);
+
         $order = ['inbox' => 0, 'sent' => 1, 'drafts' => 2, 'outbox' => 3, 'trash' => 4, 'other' => 5];
         usort($folders, static function (array $left, array $right) use ($order): int {
             $roleOrder = ($order[$left['role']] ?? 9) <=> ($order[$right['role']] ?? 9);
@@ -148,6 +165,10 @@ final class EasClient
     }
 
     /**
+     * Klasördeki bütün mevcut mailleri tek HTTP yanıtında döndürür.
+     * Exchange tarafında WindowSize en fazla 512 olduğu için MoreAvailable
+     * geldikçe sunucu içinde devam Sync istekleri yapılır.
+     *
      * @return array{messages:list<array<string,mixed>>,moreAvailable:bool,pages:int,syncKey:string}
      */
     public function listMessages(string $folderId): array
@@ -166,10 +187,10 @@ final class EasClient
         $seen = [];
         $moreAvailable = false;
         $pages = 0;
-        $maxPages = max(1, min(5, (int) ($this->config['max_sync_pages'] ?? 2)));
+        $maxPages = max(1, min(50, (int) ($this->config['max_sync_pages'] ?? 20)));
 
         do {
-            $tree = $this->request('Sync', $this->syncPayload($folderId, $syncKey, true));
+            $tree = $this->request('Sync', $this->syncPayload($folderId, $syncKey, true, false));
             $collection = $this->findNodes($tree, 'Collection')[0] ?? $tree;
             $status = $this->firstText($collection, 'Status');
             if ($status !== '' && $status !== '1') {
@@ -181,6 +202,8 @@ final class EasClient
 
             foreach ($this->findNodes($collection, 'Add') as $add) {
                 $message = $this->messageFromNode($add);
+                // Liste cevabını küçük tut; tam HTML gövde mail açılınca ayrıca alınır.
+                $message['body'] = '';
                 if ($message['id'] !== '' && !isset($seen[$message['id']])) {
                     $seen[$message['id']] = true;
                     $messages[] = $message;
@@ -207,6 +230,109 @@ final class EasClient
     }
 
     /**
+     * Mevcut SyncKey üzerinden yalnızca yeni/değişen/silinen öğeleri getirir.
+     *
+     * @return array{added:list<array<string,mixed>>,changed:list<array<string,mixed>>,deleted:list<string>,moreAvailable:bool,pages:int,syncKey:string}
+     */
+    public function syncChanges(string $folderId, string $syncKey): array
+    {
+        if ($folderId === '' || strlen($folderId) > 512 || $syncKey === '' || strlen($syncKey) > 512) {
+            throw new InvalidArgumentException('Klasör eşitleme bilgisi geçersiz.');
+        }
+
+        $added = [];
+        $changed = [];
+        $deleted = [];
+        $pages = 0;
+        $moreAvailable = false;
+        $maxPages = max(1, min(20, (int) ($this->config['delta_sync_pages'] ?? 5)));
+
+        do {
+            $tree = $this->request('Sync', $this->syncPayload($folderId, $syncKey, true, false));
+            $collection = $this->findNodes($tree, 'Collection')[0] ?? $tree;
+            $status = $this->firstText($collection, 'Status');
+            if ($status !== '' && $status !== '1') {
+                throw new RuntimeException("Exchange delta eşitleme hatası: {$status}");
+            }
+
+            foreach ($this->findNodes($collection, 'Add') as $node) {
+                $message = $this->messageFromNode($node);
+                $message['body'] = '';
+                if ($message['id'] !== '') {
+                    $added[] = $message;
+                }
+            }
+            foreach ($this->findNodes($collection, 'Change') as $node) {
+                $message = $this->messageFromNode($node);
+                $message['body'] = '';
+                if ($message['id'] !== '') {
+                    $changed[] = $message;
+                }
+            }
+            foreach ($this->findNodes($collection, 'Delete') as $node) {
+                $id = $this->firstText($node, 'ServerId');
+                if ($id !== '') {
+                    $deleted[] = $id;
+                }
+            }
+
+            $nextSyncKey = $this->firstText($collection, 'SyncKey');
+            if ($nextSyncKey === '') {
+                throw new RuntimeException('Exchange delta eşitlemeden anahtar döndürmedi.');
+            }
+            $syncKey = $nextSyncKey;
+            $moreAvailable = count($this->findNodes($collection, 'MoreAvailable')) > 0;
+            $pages++;
+        } while ($moreAvailable && $pages < $maxPages);
+
+        return [
+            'added' => $added,
+            'changed' => $changed,
+            'deleted' => array_values(array_unique($deleted)),
+            'moreAvailable' => $moreAvailable,
+            'pages' => $pages,
+            'syncKey' => $syncKey,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function fetchMessage(string $folderId, string $messageId): array
+    {
+        if ($folderId === '' || strlen($folderId) > 512 || $messageId === '' || strlen($messageId) > 512) {
+            throw new InvalidArgumentException('Mail kimliği geçersiz.');
+        }
+
+        $bodyPreference = $this->tag(17, 5,
+            $this->tag(17, 6, $this->inlineText('2')) .
+            $this->tag(17, 7, $this->inlineText('1048576')) .
+            $this->tag(17, 8, $this->inlineText('0'))
+        );
+
+        $payload = $this->document(
+            $this->tag(20, 5,
+                $this->tag(20, 6,
+                    $this->tag(20, 7, $this->inlineText('Mailbox')) .
+                    $this->tag(0, 18, $this->inlineText($folderId)) .
+                    $this->tag(0, 13, $this->inlineText($messageId)) .
+                    $this->tag(20, 8, $bodyPreference)
+                )
+            )
+        );
+
+        $tree = $this->request('ItemOperations', $payload);
+        $fetch = $this->findNodes($tree, 'Fetch')[0] ?? $tree;
+        $status = $this->firstText($fetch, 'Status') ?: $this->firstText($tree, 'Status');
+        if ($status !== '1') {
+            throw new RuntimeException('Mail içeriği alınamadı. Exchange durum kodu: ' . ($status !== '' ? $status : 'yanıt yok'));
+        }
+
+        $properties = $this->findNodes($fetch, 'Properties')[0] ?? $fetch;
+        $message = $this->messageFromNode($properties);
+        $message['id'] = $messageId;
+        return $message;
+    }
+
+    /**
      * @param list<string> $messageIds
      */
     public function deleteMessages(string $folderId, string $syncKey, array $messageIds, bool $deletesAsMoves = true): string
@@ -216,14 +342,17 @@ final class EasClient
             throw new InvalidArgumentException('Klasör eşitleme anahtarı geçersiz. Klasörü yenileyip tekrar deneyin.');
         }
 
-        $commands = '';
-        foreach ($ids as $messageId) {
-            $commands .= $this->tag(0, 9,
-                $this->tag(0, 13, $this->inlineText($messageId))
-            );
+        foreach (array_chunk($ids, 200) as $chunk) {
+            $commands = '';
+            foreach ($chunk as $messageId) {
+                $commands .= $this->tag(0, 9,
+                    $this->tag(0, 13, $this->inlineText($messageId))
+                );
+            }
+            $syncKey = $this->applySyncMutation($folderId, $syncKey, $commands, $deletesAsMoves);
         }
 
-        return $this->applySyncMutation($folderId, $syncKey, $commands, $deletesAsMoves);
+        return $syncKey;
     }
 
     /**
@@ -236,17 +365,20 @@ final class EasClient
             throw new InvalidArgumentException('Klasör eşitleme anahtarı geçersiz. Klasörü yenileyip tekrar deneyin.');
         }
 
-        $commands = '';
-        foreach ($ids as $messageId) {
-            $commands .= $this->tag(0, 8,
-                $this->tag(0, 13, $this->inlineText($messageId)) .
-                $this->tag(0, 29,
-                    $this->tag(2, 21, $this->inlineText($read ? '1' : '0'))
-                )
-            );
+        foreach (array_chunk($ids, 200) as $chunk) {
+            $commands = '';
+            foreach ($chunk as $messageId) {
+                $commands .= $this->tag(0, 8,
+                    $this->tag(0, 13, $this->inlineText($messageId)) .
+                    $this->tag(0, 29,
+                        $this->tag(2, 21, $this->inlineText($read ? '1' : '0'))
+                    )
+                );
+            }
+            $syncKey = $this->applySyncMutation($folderId, $syncKey, $commands, false);
         }
 
-        return $this->applySyncMutation($folderId, $syncKey, $commands, false);
+        return $syncKey;
     }
 
     /**
@@ -401,8 +533,8 @@ final class EasClient
         if ($folderId === '' || strlen($folderId) > 512) {
             throw new InvalidArgumentException('Klasör kimliği geçersiz.');
         }
-        if ($messageIds === [] || count($messageIds) > 200) {
-            throw new InvalidArgumentException('Bir işlemde 1 ile 200 arasında mail seçebilirsiniz.');
+        if ($messageIds === [] || count($messageIds) > 5000) {
+            throw new InvalidArgumentException('Bir işlemde 1 ile 5000 arasında mail seçebilirsiniz.');
         }
 
         $clean = [];
@@ -473,19 +605,18 @@ final class EasClient
         return $this->document($this->tag(7, 22, $this->tag(7, 18, $this->inlineText('0'))));
     }
 
-    private function syncPayload(string $folderId, string $syncKey, bool $getChanges): string
+    private function syncPayload(string $folderId, string $syncKey, bool $getChanges, bool $fullBody = false): string
     {
         $collection =
             $this->tag(0, 11, $this->inlineText($syncKey)) .
             $this->tag(0, 18, $this->inlineText($folderId));
 
         if ($getChanges) {
-            $windowSize = max(10, min(100, (int) ($this->config['window_size'] ?? 100)));
-            // HTML gövde iste: imza, tablo, bağlantı ve görseller mümkün
-            // olduğunca Exchange'deki biçimiyle korunur.
+            $windowSize = max(10, min(512, (int) ($this->config['window_size'] ?? 512)));
             $bodyPreference = $this->tag(17, 5,
-                $this->tag(17, 6, $this->inlineText('2')) .
-                $this->tag(17, 7, $this->inlineText('65536'))
+                $this->tag(17, 6, $this->inlineText($fullBody ? '2' : '1')) .
+                $this->tag(17, 7, $this->inlineText($fullBody ? '1048576' : '1024')) .
+                $this->tag(17, 8, $this->inlineText('0'))
             );
             $collection .=
                 $this->tag(0, 30) .
