@@ -1050,6 +1050,7 @@ function applyMessageDelta(delta) {
     if (!delta || typeof delta !== 'object') return;
 
     const deleted = new Set(Array.isArray(delta.deleted) ? delta.deleted : []);
+    const deletedExisting = state.messages.filter((message) => deleted.has(message.id));
     if (deleted.size) {
         state.messages = state.messages.filter((message) => !deleted.has(message.id));
         for (const id of deleted) state.selected.delete(id);
@@ -1070,11 +1071,30 @@ function applyMessageDelta(delta) {
         }
     }
 
+    let addedCount = 0;
+    let addedUnread = 0;
     for (const added of Array.isArray(delta.added) ? delta.added : []) {
         if (!added?.id || byId.has(added.id)) continue;
         const message = { ...added, detailLoaded: false };
         state.messages.push(message);
         byId.set(message.id, message);
+        addedCount++;
+        if (!message.read) addedUnread++;
+    }
+
+    if (state.activeFolder && Number.isInteger(state.activeFolder.totalCount)) {
+        state.activeFolder.totalCount = Math.max(
+            0,
+            state.activeFolder.totalCount - deletedExisting.length + addedCount
+        );
+        if (Number.isInteger(state.activeFolder.unreadCount)) {
+            const deletedUnread = deletedExisting.filter((message) => !message.read).length;
+            state.activeFolder.unreadCount = Math.max(
+                0,
+                state.activeFolder.unreadCount - deletedUnread + addedUnread
+            );
+        }
+        renderFolders();
     }
 
     state.messages.sort((left, right) => String(right.date || '').localeCompare(String(left.date || '')));
