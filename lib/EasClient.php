@@ -702,25 +702,32 @@ final class EasClient
         $added = [];
         $changed = [];
         $deleted = [];
+        $commands = $this->directChild($collection, 'Commands');
 
-        foreach ($this->findNodes($collection, 'Add') as $node) {
-            $message = $this->messageFromNode($node);
-            $message['body'] = '';
-            if ($message['id'] !== '') {
-                $added[] = $message;
-            }
-        }
-        foreach ($this->findNodes($collection, 'Change') as $node) {
-            $message = $this->messageFromNode($node);
-            $message['body'] = '';
-            if ($message['id'] !== '') {
-                $changed[] = $message;
-            }
-        }
-        foreach ($this->findNodes($collection, 'Delete') as $node) {
-            $id = $this->firstText($node, 'ServerId');
-            if ($id !== '') {
-                $deleted[] = $id;
+        if ($commands !== null) {
+            foreach ($commands->children as $node) {
+                if ($node->name === 'Add') {
+                    $message = $this->messageFromNode($node);
+                    $message['body'] = '';
+                    if ($message['id'] !== '') {
+                        $added[] = $message;
+                    }
+                    continue;
+                }
+                if ($node->name === 'Change') {
+                    $message = $this->messageFromNode($node);
+                    $message['body'] = '';
+                    if ($message['id'] !== '') {
+                        $changed[] = $message;
+                    }
+                    continue;
+                }
+                if ($node->name === 'Delete') {
+                    $id = $this->firstText($node, 'ServerId');
+                    if ($id !== '') {
+                        $deleted[] = $id;
+                    }
+                }
             }
         }
 
@@ -834,8 +841,11 @@ final class EasClient
         if ($response === false) {
             throw new RuntimeException('Exchange bağlantı hatası: ' . ($curlError ?: 'bilinmeyen hata'));
         }
-        if ($status === 401 || $status === 403) {
+        if ($status === 401) {
             throw new RuntimeException('Kullanıcı adı veya parola hatalı.');
+        }
+        if ($status === 403) {
+            throw new RuntimeException('Exchange isteği HTTP 403 ile reddetti. Oturum korunuyor; art arda yeni istek göndermeden daha sonra tekrar deneyin.');
         }
         if ($status < 200 || $status >= 300) {
             throw new RuntimeException("Exchange HTTP hatası: {$status}");
