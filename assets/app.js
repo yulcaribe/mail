@@ -290,7 +290,15 @@ function renderFolders() {
         label.className = 'folder-name';
         label.textContent = folder.name;
 
-        button.append(icon, label);
+        const count = document.createElement('span');
+        count.className = 'folder-count';
+        count.textContent = Number.isInteger(folder.totalCount) ? String(folder.totalCount) : '';
+        if (Number.isInteger(folder.unreadCount) && folder.unreadCount > 0) {
+            count.classList.add('has-unread');
+            count.title = `${folder.unreadCount} okunmamış mail`;
+        }
+
+        button.append(icon, label, count);
         button.addEventListener('click', () => selectFolder(folder));
 
         row.append(expander, button);
@@ -402,9 +410,11 @@ async function loadMessages() {
 
     try {
         const data = await api('messages', { query: { folderId: state.activeFolder.id } });
-        state.messages = data.messages || [];
+        state.messages = (data.messages || []).map((message) => ({ ...message, detailLoaded: false }));
         renderMessages();
-        elements.pageInfo.textContent = data.moreAvailable ? 'İlk sonuçlar gösteriliyor' : '';
+        elements.pageInfo.textContent = data.moreAvailable
+            ? `${state.messages.length.toLocaleString('tr-TR')} mail yüklendi; Exchange'de daha fazlası var`
+            : '';
     } catch (error) {
         if (error.status === 401) {
             showLogin('Oturumunuz sona erdi. Yeniden giriş yapın.');
@@ -704,8 +714,7 @@ function renderMailBody(value, attachments = []) {
     elements.readerBody.innerHTML = sanitizeMailHtml(raw, attachments);
 }
 
-function openMessage(message) {
-    state.readerMessageId = message.id;
+function renderReaderMessage(message, loadingBody = false) {
     elements.readerFolder.textContent = state.activeFolder ? folderPath(state.activeFolder) : '';
     elements.readerSubject.textContent = message.subject || '(Konu yok)';
     elements.readerFrom.textContent = message.from || 'Bilinmeyen gönderen';
@@ -716,17 +725,48 @@ function openMessage(message) {
     elements.readerDate.textContent = formatDate(message.date, true);
     elements.readerDate.dateTime = message.date || '';
     elements.readerAvatar.textContent = (friendlySender(message.from)[0] || '?').toLocaleUpperCase('tr-TR');
-    renderMailBody(message.body || message.preview, message.attachments || []);
+
+    if (loadingBody) {
+        elements.readerBody.classList.remove('html-message');
+        elements.readerBody.textContent = 'Mail içeriği yükleniyor…';
+    } else {
+        renderMailBody(message.body || message.preview, message.attachments || []);
+    }
+
     elements.recipientDetails.hidden = true;
     elements.recipientToggle.setAttribute('aria-expanded', 'false');
     renderReaderAttachments(message.attachments || []);
     updateReaderNavigation();
+}
+
+async function openMessage(message) {
+    const messageId = message.id;
+    const folderId = state.activeFolder?.id || '';
+    const shouldMarkRead = !message.read;
+
+    state.readerMessageId = messageId;
+    renderReaderMessage(message, !message.detailLoaded);
     elements.readerOverlay.hidden = false;
     document.body.classList.add('reader-open');
     requestAnimationFrame(() => elements.readerClose.focus());
 
-    if (!message.read && !state.processing) {
-        markMessages([message.id], true, true);
+    if (!message.detailLoaded && folderId) {
+        try {
+            const data = await api('message', { query: { folderId, id: messageId } });
+            if (state.readerMessageId !== messageId || state.activeFolder?.id !== folderId) return;
+
+            Object.assign(message, data.message || {}, { id: messageId, detailLoaded: true });
+            renderReaderMessage(message, false);
+        } catch (error) {
+            if (state.readerMessageId === messageId) {
+                renderMailBody(message.preview || 'Mail içeriği alınamadı.', message.attachments || []);
+                showToast(`Mail içeriği alınamadı: ${error.message}`);
+            }
+        }
+    }
+
+    if (shouldMarkRead && state.readerMessageId === messageId && !message.read && !state.processing) {
+        markMessages([messageId], true, true);
     }
 }
 
@@ -1006,6 +1046,65 @@ async function moveMessages(ids, destinationFolderId) {
     }
 }
 
+function applyMessageDelta(delta) {
+    if (!delta || typeof delta !== 'object') return;
+
+    const deleted = new Set(Array.isArray(delta.deleted) ? delta.deleted : []);
+    if (deleted.size) {
+        state.messages = state.messages.filter((message) => !deleted.has(message.id));
+        for (const id of deleted) state.selected.delete(id);
+        if (deleted.has(state.readerMessageId)) closeReader();
+    }
+
+    const byId = new Map(state.messages.map((message) => [message.id, message]));
+    for (const change of Array.isArray(delta.changed) ? delta.changed : []) {
+        const existing = byId.get(change.id);
+        if (!existing) continue;
+
+        const preservedBody = existing.detailLoaded ? existing.body : '';
+        const preservedAttachments = existing.detailLoaded ? existing.attachments : null;
+        Object.assign(existing, change);
+        if (existing.detailLoaded) {
+            existing.body = preservedBody;
+            if (preservedAttachments) existing.attachments = preservedAttachments;
+        }
+    }
+
+    for (const added of Array.isArray(delta.added) ? delta.added : []) {
+        if (!added?.id || byId.has(added.id)) continue;
+        const message = { ...added, detailLoaded: false };
+        state.messages.push(message);
+        byId.set(message.id, message);
+    }
+
+    state.messages.sort((left, right) => String(right.date || '').localeCompare(String(left.date || '')));
+    renderMessages();
+}
+
+function adjustFolderCountsAfterDelete(ids, permanent) {
+    const active = state.activeFolder;
+    if (!active || !Number.isInteger(active.totalCount)) return;
+
+    const removed = new Set(ids);
+    const removedUnread = state.messages.filter((message) => removed.has(message.id) && !message.read).length;
+    active.totalCount = Math.max(0, active.totalCount - ids.length);
+    if (Number.isInteger(active.unreadCount)) {
+        active.unreadCount = Math.max(0, active.unreadCount - removedUnread);
+    }
+
+    if (!permanent) {
+        const trash = state.folders.find((folder) => folder.role === 'trash');
+        if (trash && Number.isInteger(trash.totalCount)) {
+            trash.totalCount += ids.length;
+        }
+        if (trash && Number.isInteger(trash.unreadCount)) {
+            trash.unreadCount += removedUnread;
+        }
+    }
+
+    renderFolders();
+}
+
 async function deleteMessages(ids) {
     if (!state.activeFolder || !ids.length || state.processing) return;
     const permanent = state.activeFolder.role === 'trash';
@@ -1015,12 +1114,16 @@ async function deleteMessages(ids) {
 
     setProcessing(true);
     try {
-        await api('delete', {
+        const data = await api('delete', {
             method: 'POST',
             body: { folderId: state.activeFolder.id, ids, permanent },
         });
+        adjustFolderCountsAfterDelete(ids, permanent);
         removeMessagesLocally(ids);
-        showToast(permanent ? `${ids.length} mail kalıcı olarak silindi.` : `${ids.length} mail çöp kutusuna taşındı.`);
+        applyMessageDelta(data.delta);
+        showToast(permanent
+            ? `${ids.length} mail kalıcı olarak silindi; klasör eşitlendi.`
+            : `${ids.length} mail çöp kutusuna taşındı; klasör eşitlendi.`);
     } catch (error) {
         handleOperationError(error);
     } finally {
