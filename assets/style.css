@@ -442,6 +442,25 @@ noscript {
     white-space: nowrap;
 }
 
+.folder-count {
+    min-width: 22px;
+    margin-left: auto;
+    padding-left: 6px;
+    color: #728996;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.folder-count.has-unread {
+    color: #dceaf1;
+    font-weight: 800;
+}
+
+.folder-button.active .folder-count {
+    color: #f5c4ad;
+}
+
 .settings-button {
     margin-top: 20px;
     padding-top: 15px;
