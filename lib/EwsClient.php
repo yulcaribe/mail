@@ -38,6 +38,8 @@ final class EwsClient
             '<t:FieldURI FieldURI="folder:DisplayName" />' .
             '<t:FieldURI FieldURI="folder:ParentFolderId" />' .
             '<t:FieldURI FieldURI="folder:FolderClass" />' .
+            '<t:FieldURI FieldURI="folder:TotalCount" />' .
+            '<t:FieldURI FieldURI="folder:UnreadCount" />' .
             '</t:AdditionalProperties>' .
             '</m:FolderShape>' .
             '<m:IndexedPageFolderView MaxEntriesReturned="1000" Offset="0" BasePoint="Beginning" />' .
@@ -76,6 +78,8 @@ final class EwsClient
                     'parentId' => $parentNode instanceof DOMElement ? $parentNode->getAttribute('Id') : '',
                     'name' => $name,
                     'path' => $name,
+                    'totalCount' => (int) $this->text($xpath, './t:TotalCount', $folderNode),
+                    'unreadCount' => (int) $this->text($xpath, './t:UnreadCount', $folderNode),
                 ];
             }
         }
