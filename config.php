@@ -8,7 +8,8 @@ return [
     'device_id' => 'device',
     'device_type' => 'device',
     'protocol_version' => '14.1',
-    'window_size' => 100,
-    'max_sync_pages' => 2,
+    'window_size' => 512,
+    'max_sync_pages' => 20,
+    'delta_sync_pages' => 5,
     'verify_tls' => true,
 ];
