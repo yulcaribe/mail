@@ -356,6 +356,66 @@ final class EasClient
     }
 
     /**
+     * Silme komutunu ve bekleyen sunucu değişikliklerini mümkün olduğunca aynı
+     * Sync isteğinde işler. Böylece tarayıcı tek POST yapar ve normalde tek
+     * Exchange Sync isteğiyle hem silme hem delta yenileme tamamlanır.
+     *
+     * @return array{added:list<array<string,mixed>>,changed:list<array<string,mixed>>,deleted:list<string>,moreAvailable:bool,pages:int,syncKey:string}
+     */
+    public function deleteMessagesAndSync(string $folderId, string $syncKey, array $messageIds, bool $deletesAsMoves = true): array
+    {
+        $ids = $this->validateOperationIds($folderId, $messageIds);
+        if ($syncKey === '' || strlen($syncKey) > 512) {
+            throw new InvalidArgumentException('Klasör eşitleme anahtarı geçersiz. Klasörü yenileyip tekrar deneyin.');
+        }
+
+        $chunks = array_chunk($ids, 200);
+        $delta = [
+            'added' => [],
+            'changed' => [],
+            'deleted' => [],
+            'moreAvailable' => false,
+            'pages' => 0,
+            'syncKey' => $syncKey,
+        ];
+
+        foreach ($chunks as $index => $chunk) {
+            $commands = '';
+            foreach ($chunk as $messageId) {
+                $commands .= $this->tag(0, 9,
+                    $this->tag(0, 13, $this->inlineText($messageId))
+                );
+            }
+
+            $withChanges = $index === array_key_last($chunks);
+            $result = $this->applySyncMutationDetailed(
+                $folderId,
+                $syncKey,
+                $commands,
+                $deletesAsMoves,
+                $withChanges
+            );
+            $syncKey = $result['syncKey'];
+
+            if ($withChanges) {
+                $delta = $this->deltaFromCollection($result['collection'], $syncKey);
+            }
+        }
+
+        if ($delta['moreAvailable']) {
+            $tail = $this->syncChanges($folderId, $syncKey);
+            $delta['added'] = array_merge($delta['added'], $tail['added']);
+            $delta['changed'] = array_merge($delta['changed'], $tail['changed']);
+            $delta['deleted'] = array_values(array_unique(array_merge($delta['deleted'], $tail['deleted'])));
+            $delta['moreAvailable'] = $tail['moreAvailable'];
+            $delta['pages'] += $tail['pages'];
+            $delta['syncKey'] = $tail['syncKey'];
+        }
+
+        return $delta;
+    }
+
+    /**
      * @param list<string> $messageIds
      */
     public function setReadState(string $folderId, string $syncKey, array $messageIds, bool $read): string
@@ -553,15 +613,48 @@ final class EasClient
 
     private function applySyncMutation(string $folderId, string $syncKey, string $commands, bool $deletesAsMoves): string
     {
+        return $this->applySyncMutationDetailed(
+            $folderId,
+            $syncKey,
+            $commands,
+            $deletesAsMoves,
+            false
+        )['syncKey'];
+    }
+
+    /**
+     * @return array{syncKey:string,collection:WbxmlNode}
+     */
+    private function applySyncMutationDetailed(
+        string $folderId,
+        string $syncKey,
+        string $commands,
+        bool $deletesAsMoves,
+        bool $getChanges
+    ): array {
         $collection =
             $this->tag(0, 11, $this->inlineText($syncKey)) .
-            $this->tag(0, 18, $this->inlineText($folderId));
+            $this->tag(0, 18, $this->inlineText($folderId)) .
+            $this->tag(0, 30, $this->inlineText($deletesAsMoves ? '1' : '0'));
 
-        $collection .= $this->tag(
-            0,
-            30,
-            $this->inlineText($deletesAsMoves ? '1' : '0')
-        );
+        if ($getChanges) {
+            $windowSize = max(10, min(512, (int) ($this->config['window_size'] ?? 512)));
+            $bodyPreference = $this->tag(17, 5,
+                $this->tag(17, 6, $this->inlineText('1')) .
+                $this->tag(17, 7, $this->inlineText('1024')) .
+                $this->tag(17, 8, $this->inlineText('0'))
+            );
+
+            // ActiveSync Collection sırası: GetChanges, WindowSize, Options, Commands.
+            $collection .=
+                $this->tag(0, 19, $this->inlineText('1')) .
+                $this->tag(0, 21, $this->inlineText((string) $windowSize)) .
+                $this->tag(0, 23,
+                    $this->tag(0, 24, $this->inlineText('0')) .
+                    $bodyPreference
+                );
+        }
+
         $collection .= $this->tag(0, 22, $commands);
 
         $tree = $this->request('Sync', $this->document(
@@ -597,7 +690,48 @@ final class EasClient
         if ($nextSyncKey === '') {
             throw new RuntimeException('Exchange işlemden sonra eşitleme anahtarını vermedi.');
         }
-        return $nextSyncKey;
+
+        return ['syncKey' => $nextSyncKey, 'collection' => $responseCollection];
+    }
+
+    /**
+     * @return array{added:list<array<string,mixed>>,changed:list<array<string,mixed>>,deleted:list<string>,moreAvailable:bool,pages:int,syncKey:string}
+     */
+    private function deltaFromCollection(WbxmlNode $collection, string $syncKey): array
+    {
+        $added = [];
+        $changed = [];
+        $deleted = [];
+
+        foreach ($this->findNodes($collection, 'Add') as $node) {
+            $message = $this->messageFromNode($node);
+            $message['body'] = '';
+            if ($message['id'] !== '') {
+                $added[] = $message;
+            }
+        }
+        foreach ($this->findNodes($collection, 'Change') as $node) {
+            $message = $this->messageFromNode($node);
+            $message['body'] = '';
+            if ($message['id'] !== '') {
+                $changed[] = $message;
+            }
+        }
+        foreach ($this->findNodes($collection, 'Delete') as $node) {
+            $id = $this->firstText($node, 'ServerId');
+            if ($id !== '') {
+                $deleted[] = $id;
+            }
+        }
+
+        return [
+            'added' => $added,
+            'changed' => $changed,
+            'deleted' => array_values(array_unique($deleted)),
+            'moreAvailable' => count($this->findNodes($collection, 'MoreAvailable')) > 0,
+            'pages' => 1,
+            'syncKey' => $syncKey,
+        ];
     }
 
     private function folderSyncPayload(): string
