@@ -612,17 +612,9 @@ try {
 
         if ($action === 'delete') {
             $permanent = (bool) ($body['permanent'] ?? false);
-            $nextSyncKey = $client->deleteMessages($folderId, $syncKey, $ids, !$permanent);
-            $_SESSION['sync_keys'][$folderId] = $nextSyncKey;
-
-            $delta = null;
-            try {
-                $delta = $client->syncChanges($folderId, $nextSyncKey);
-                $_SESSION['sync_keys'][$folderId] = $delta['syncKey'];
-                unset($delta['syncKey']);
-            } catch (Throwable $deltaException) {
-                error_log('Beyan Mail delete delta: ' . $deltaException->getMessage());
-            }
+            $delta = $client->deleteMessagesAndSync($folderId, $syncKey, $ids, !$permanent);
+            $_SESSION['sync_keys'][$folderId] = $delta['syncKey'];
+            unset($delta['syncKey']);
 
             respond(['ok' => true, 'count' => count($ids), 'delta' => $delta]);
         }
